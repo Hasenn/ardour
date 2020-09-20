@@ -585,7 +585,7 @@ ExportHandler::export_cd_marker_file (ExportTimespanPtr timespan, ExportFormatSp
 				if ((*i)->is_mark()) {
 					/* Index within track */
 
-					status.index_position = (*i)->start() - timespan->get_start();
+					status.index_position = (*i)->start_sample() - timespan->get_start();
 					(this->*index_func) (status);
 				}
 
@@ -595,7 +595,7 @@ ExportHandler::export_cd_marker_file (ExportTimespanPtr timespan, ExportFormatSp
 			/* A track, defined by a cd range marker or a cd location marker outside of a cd range */
 
 			status.track_position = last_end_time - timespan->get_start();
-			status.track_start_sample = (*i)->start() - timespan->get_start();  // everything before this is the pregap
+			status.track_start_sample = (*i)->start_sample() - timespan->get_start();  // everything before this is the pregap
 			status.track_duration = 0;
 
 			if ((*i)->is_mark()) {
@@ -604,9 +604,9 @@ ExportHandler::export_cd_marker_file (ExportTimespanPtr timespan, ExportFormatSp
 				++nexti;
 
 				if (nexti != temp.end()) {
-					status.track_duration = (*nexti)->start() - last_end_time;
+					status.track_duration = (*nexti)->start_sample() - last_end_time;
 
-					last_end_time = (*nexti)->start();
+					last_end_time = (*nexti)->start_sample();
 				} else {
 					// this was the last marker, use timespan end
 					status.track_duration = timespan->get_end() - last_end_time;
@@ -615,9 +615,9 @@ ExportHandler::export_cd_marker_file (ExportTimespanPtr timespan, ExportFormatSp
 				}
 			} else {
 				// range
-				status.track_duration = (*i)->end() - last_end_time;
+				status.track_duration = (*i)->end_sample() - last_end_time;
 
-				last_end_time = (*i)->end();
+				last_end_time = (*i)->end_sample();
 			}
 
 			(this->*track_func) (status);

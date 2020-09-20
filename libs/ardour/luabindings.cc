@@ -26,10 +26,10 @@
 #include "pbd/openuri.h"
 
 #include "temporal/bbt_time.h"
+#include "temporal/range.h"
 
 #include "evoral/Control.h"
 #include "evoral/ControlList.h"
-#include "evoral/Range.h"
 
 #include "ardour/amp.h"
 #include "ardour/async_midi_port.h"
@@ -197,7 +197,6 @@ CLASSKEYS(Selectable*);
 CLASSKEYS(std::list<Selectable*>);
 
 CLASSKEYS(ARDOUR::AudioEngine);
-CLASSKEYS(ARDOUR::BeatsSamplesConverter);
 CLASSKEYS(ARDOUR::BufferSet);
 CLASSKEYS(ARDOUR::ChanCount);
 CLASSKEYS(ARDOUR::ChanMapping);
@@ -252,7 +251,7 @@ CLASSKEYS(std::list<Evoral::ControlEvent*>);
 CLASSKEYS(std::vector<ARDOUR::Plugin::PresetRecord>);
 CLASSKEYS(std::vector<boost::shared_ptr<ARDOUR::Processor> >);
 CLASSKEYS(std::vector<boost::shared_ptr<ARDOUR::Source> >);
-CLASSKEYS(std::vector<boost::shared_ptr<ARDOUR::Readable> >);
+CLASSKEYS(std::vector<boost::shared_ptr<ARDOUR::AudioReadable> >);
 CLASSKEYS(std::list<boost::shared_ptr<ARDOUR::PluginInfo> >); // PluginInfoList
 
 CLASSKEYS(std::list<ArdourMarker*>);
@@ -278,7 +277,7 @@ CLASSKEYS(boost::shared_ptr<ARDOUR::MidiRegion>);
 CLASSKEYS(boost::shared_ptr<ARDOUR::MidiSource>);
 CLASSKEYS(boost::shared_ptr<ARDOUR::PluginInfo>);
 CLASSKEYS(boost::shared_ptr<ARDOUR::Processor>);
-CLASSKEYS(boost::shared_ptr<ARDOUR::Readable>);
+CLASSKEYS(boost::shared_ptr<ARDOUR::AudioReadable>);
 CLASSKEYS(boost::shared_ptr<ARDOUR::Region>);
 CLASSKEYS(boost::shared_ptr<ARDOUR::SessionPlaylists>);
 CLASSKEYS(boost::shared_ptr<Evoral::ControlList>);
@@ -577,7 +576,7 @@ LuaBindings::common (lua_State* L)
 		.addFunction ("set_interpolation", &Evoral::ControlList::set_interpolation)
 		.addFunction ("truncate_end", &Evoral::ControlList::truncate_end)
 		.addFunction ("truncate_start", &Evoral::ControlList::truncate_start)
-		.addFunction ("clear", (void (Evoral::ControlList::*)(double, double))&Evoral::ControlList::clear)
+		.addFunction ("clear", (void (Evoral::ControlList::*)(timepos_t const &, timepos_t const &))&Evoral::ControlList::clear)
 		.addFunction ("clear_list", (void (Evoral::ControlList::*)())&Evoral::ControlList::clear)
 		.addFunction ("in_write_pass", &Evoral::ControlList::in_write_pass)
 		.addFunction ("events", &Evoral::ControlList::events)
@@ -600,10 +599,11 @@ LuaBindings::common (lua_State* L)
 		.addData ("logarithmic", &Evoral::ParameterDescriptor::logarithmic)
 		.endClass ()
 
-		.beginClass <Evoral::Range<samplepos_t> > ("Range")
-		.addConstructor <void (*) (samplepos_t, samplepos_t)> ()
-		.addData ("from", &Evoral::Range<samplepos_t>::from)
-		.addData ("to", &Evoral::Range<samplepos_t>::to)
+		.beginClass <Temporal::Range> ("Range")
+		.addConstructor <void (*) (timepos_t, timepos_t)> ()
+		.addFunction ("start", &Temporal::Range::start)
+		/* "end is a reserved Lua word */
+		.addFunction ("_end", &Temporal::Range::end)
 		.endClass ()
 
 		.deriveWSPtrClass <Evoral::Sequence<Temporal::Beats>, Evoral::ControlSet> ("Sequence")
@@ -764,20 +764,13 @@ LuaBindings::common (lua_State* L)
 		.beginClass <Progress> ("Progress")
 		.endClass ()
 
-		.beginClass <MusicSample> ("MusicSample")
-		.addConstructor <void (*) (samplepos_t, int32_t)> ()
-		.addFunction ("set", &MusicSample::set)
-		.addData ("sample", &MusicSample::sample)
-		.addData ("division", &MusicSample::division)
-		.endClass ()
-
-		.beginClass <AudioRange> ("AudioRange")
-		.addConstructor <void (*) (samplepos_t, samplepos_t, uint32_t)> ()
-		.addFunction ("length", &AudioRange::length)
-		.addFunction ("equal", &AudioRange::equal)
-		.addData ("start", &AudioRange::start)
-		.addData ("_end", &AudioRange::end) // XXX "end" is a lua reserved word
-		.addData ("id", &AudioRange::id)
+		.beginClass <TimelineRange> ("TimelineRange")
+		.addConstructor <void (*) (timepos_t, timepos_t, uint32_t)> ()
+		.addFunction ("length", &TimelineRange::length)
+		.addFunction ("equal", &TimelineRange::equal)
+		.addFunction ("start", &TimelineRange::start)
+		.addFunction ("_end", &TimelineRange::end) // XXX "end" is a lua reserved word
+		.addData ("id", &TimelineRange::id)
 		.endClass ()
 
 		.beginWSPtrClass <PluginInfo> ("PluginInfo")
@@ -1156,7 +1149,7 @@ LuaBindings::common (lua_State* L)
 		.addFunction ("lower_region", &Playlist::lower_region)
 		.addFunction ("raise_region_to_top", &Playlist::raise_region_to_top)
 		.addFunction ("lower_region_to_bottom", &Playlist::lower_region_to_bottom)
-		.addFunction ("duplicate", (void (Playlist::*)(boost::shared_ptr<Region>, samplepos_t, samplecnt_t, float))&Playlist::duplicate)
+		.addFunction ("duplicate", (void (Playlist::*)(boost::shared_ptr<Region>, timepos_t &, timecnt_t const &, float))&Playlist::duplicate)
 		.addFunction ("duplicate_until", &Playlist::duplicate_until)
 		.addFunction ("duplicate_range", &Playlist::duplicate_range)
 		.addFunction ("combine", &Playlist::combine)
@@ -1168,7 +1161,7 @@ LuaBindings::common (lua_State* L)
 		.addFunction ("split_region", &Playlist::split_region)
 		.addFunction ("get_orig_track_id", &Playlist::get_orig_track_id)
 		//.addFunction ("split", &Playlist::split) // XXX needs MusicSample
-		.addFunction ("cut", (boost::shared_ptr<Playlist> (Playlist::*)(std::list<AudioRange>&, bool))&Playlist::cut)
+		.addFunction ("cut", (boost::shared_ptr<Playlist> (Playlist::*)(std::list<TimelineRange>&, bool))&Playlist::cut)
 #if 0
 		.addFunction ("copy", &Playlist::copy)
 		.addFunction ("paste", &Playlist::paste)
@@ -1229,28 +1222,27 @@ LuaBindings::common (lua_State* L)
 		.addFunction ("write_immediate_event", &MidiTrack::write_immediate_event)
 		.endClass ()
 
-		.beginWSPtrClass <Readable> ("Readable")
-		.addFunction ("read", &Readable::read)
-		.addFunction ("readable_length", &Readable::readable_length)
-		.addFunction ("n_channels", &Readable::n_channels)
-		.addStaticFunction ("load", &Readable::load)
+		.beginWSPtrClass <AudioReadable> ("Readable")
+		.addFunction ("read", &AudioReadable::read)
+		.addFunction ("readable_length", &AudioReadable::readable_length_samples)
+		.addFunction ("n_channels", &AudioReadable::n_channels)
+		.addStaticFunction ("load", &AudioReadable::load)
 		.endClass ()
 
-		.deriveWSPtrClass <AudioRom, Readable> ("AudioRom")
+		.deriveWSPtrClass <AudioRom, AudioReadable> ("AudioRom")
 		.addStaticFunction ("new_rom", &AudioRom::new_rom)
 		.endClass ()
 
 		.deriveWSPtrClass <Region, SessionObject> ("Region")
-		.addCast<Readable> ("to_readable")
 		.addCast<MidiRegion> ("to_midiregion")
 		.addCast<AudioRegion> ("to_audioregion")
 
 		.addFunction ("playlist", &Region::playlist)
 		.addFunction ("set_name", &Region::set_name)
 		/* properties */
-		.addFunction ("position", &Region::position)
-		.addFunction ("start", &Region::start)
-		.addFunction ("length", &Region::length)
+		.addFunction ("position", &Region::nt_position)
+		.addFunction ("start", &Region::nt_start)
+		.addFunction ("length", &Region::nt_length)
 		.addFunction ("layer", &Region::layer)
 		.addFunction ("data_type", &Region::data_type)
 		.addFunction ("stretch", &Region::stretch)
@@ -1270,7 +1262,7 @@ LuaBindings::common (lua_State* L)
 		.addFunction ("sync_marked", &Region::sync_marked)
 		.addFunction ("external", &Region::external)
 		.addFunction ("import", &Region::import)
-		.addFunction ("covers", &Region::covers)
+		.addFunction ("covers", (bool (Region::*)(timepos_t const &) const) &Region::covers)
 		.addFunction ("at_natural_position", &Region::at_natural_position)
 		.addFunction ("is_compound", &Region::is_compound)
 		.addFunction ("captured_xruns", &Region::captured_xruns)
@@ -1288,7 +1280,6 @@ LuaBindings::common (lua_State* L)
 		.addFunction ("move_start", &Region::move_start)
 		.addFunction ("master_sources", &Region::master_sources)
 		.addFunction ("master_source_names", &Region::master_source_names)
-		.addFunction ("n_channels", &Region::n_channels)
 		.addFunction ("trim_front", &Region::trim_front)
 		.addFunction ("trim_end", &Region::trim_end)
 		.addFunction ("trim_to", &Region::trim_to)
@@ -1300,7 +1291,6 @@ LuaBindings::common (lua_State* L)
 		.addFunction ("lower_to_bottom", &Region::lower_to_bottom)
 		.addFunction ("set_sync_position", &Region::set_sync_position)
 		.addFunction ("clear_sync_position", &Region::clear_sync_position)
-		.addFunction ("quarter_note", &Region::quarter_note)
 		.addFunction ("set_hidden", &Region::set_hidden)
 		.addFunction ("set_muted", &Region::set_muted)
 		.addFunction ("set_opaque", &Region::set_opaque)
@@ -1315,11 +1305,11 @@ LuaBindings::common (lua_State* L)
 		.addFunction ("do_export", &MidiRegion::do_export)
 		.addFunction ("midi_source", &MidiRegion::midi_source)
 		.addFunction ("model", (boost::shared_ptr<MidiModel> (MidiRegion::*)())&MidiRegion::model)
-		.addFunction ("start_beats", &MidiRegion::start_beats)
-		.addFunction ("length_beats", &MidiRegion::length_beats)
 		.endClass ()
 
 		.deriveWSPtrClass <AudioRegion, Region> ("AudioRegion")
+		.addCast<AudioReadable> ("to_readable")
+		.addFunction ("n_channels", &AudioRegion::n_channels)
 		.addFunction ("audio_source", &AudioRegion::audio_source)
 		.addFunction ("set_scale_amplitude", &AudioRegion::set_scale_amplitude)
 		.addFunction ("scale_amplitude", &AudioRegion::scale_amplitude)
@@ -1370,8 +1360,8 @@ LuaBindings::common (lua_State* L)
 		.endClass ()
 
 		.deriveWSPtrClass <AudioSource, Source> ("AudioSource")
-		.addCast<Readable> ("to_readable")
-		.addFunction ("readable_length", &AudioSource::readable_length)
+		.addCast<AudioReadable> ("to_readable")
+		.addFunction ("readable_length", &AudioSource::readable_length_samples)
 		.addFunction ("n_channels", &AudioSource::n_channels)
 		.addFunction ("empty", &Source::empty)
 		.addFunction ("length", &Source::length)
@@ -1725,7 +1715,7 @@ LuaBindings::common (lua_State* L)
 		.endClass ()
 
 		.deriveWSPtrClass <AudioSource, Source> ("AudioSource")
-		.addFunction ("readable_length", &AudioSource::readable_length)
+		.addFunction ("readable_length", &AudioSource::readable_length_samples)
 		.addFunction ("n_channels", &AudioSource::n_channels)
 		.endClass ()
 
@@ -1775,8 +1765,8 @@ LuaBindings::common (lua_State* L)
 		.beginStdVector <boost::shared_ptr<Source> > ("SourceList")
 		.endClass ()
 
-		// typedef std::vector<boost::shared_ptr<Readable> >
-		.beginStdVector <boost::shared_ptr<Readable> > ("ReadableList")
+		// typedef std::vector<boost::shared_ptr<AudioReadable> >
+		.beginStdVector <boost::shared_ptr<AudioReadable> > ("ReadableList")
 		.endClass ()
 
 		// from SessionPlaylists: std::vector<boost::shared_ptr<Playlist > >
@@ -1824,14 +1814,9 @@ LuaBindings::common (lua_State* L)
 		.beginConstStdList <boost::shared_ptr<Port> > ("PortList")
 		.endClass ()
 
-		// used by Playlist::cut/copy
-		.beginConstStdList <AudioRange> ("AudioRangeList")
-		.endClass ()
-
 		.beginConstStdCPtrList <Location> ("LocationList")
 		.endClass ()
 
-		// std::list<boost::shared_ptr<AutomationControl> > ControlList
 		.beginStdList <boost::shared_ptr<AutomationControl> > ("ControlList")
 		.endClass ()
 
@@ -1872,12 +1857,6 @@ LuaBindings::common (lua_State* L)
 		.addFunction ("note_divisor", &Meter::note_divisor)
 		.addFunction ("samples_per_bar", &Meter::samples_per_bar)
 		.addFunction ("samples_per_grid", &Meter::samples_per_grid)
-		.endClass ()
-
-		.beginClass <BeatsSamplesConverter> ("BeatsSamplesConverter")
-		.addConstructor <void (*) (const TempoMap&, samplepos_t)> ()
-		.addFunction ("to", &BeatsSamplesConverter::to)
-		.addFunction ("from", &BeatsSamplesConverter::from)
 		.endClass ()
 
 		.beginClass <TempoMap> ("TempoMap")
@@ -2631,7 +2610,7 @@ LuaBindings::common (lua_State* L)
 		.addFunction ("set_strech_and_pitch", &ARDOUR::LuaAPI::Rubberband::set_strech_and_pitch)
 		.addFunction ("set_mapping", &ARDOUR::LuaAPI::Rubberband::set_mapping)
 		.addFunction ("process", &ARDOUR::LuaAPI::Rubberband::process)
-		.addFunction ("readable_length", &ARDOUR::LuaAPI::Rubberband::readable_length)
+		.addFunction ("readable_length", &ARDOUR::LuaAPI::Rubberband::readable_length_samples)
 		.addFunction ("n_channels", &ARDOUR::LuaAPI::Rubberband::n_channels)
 		.addFunction ("readable", &ARDOUR::LuaAPI::Rubberband::readable)
 		.endClass ()

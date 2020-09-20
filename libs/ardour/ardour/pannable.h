@@ -64,8 +64,8 @@ public:
 		return ((_auto_state & Write) || ((_auto_state & (Touch | Latch)) && touching()));
 	}
 
-	void start_touch (double when);
-	void stop_touch (double when);
+	void start_touch (timepos_t const & when);
+	void stop_touch (timepos_t const & when);
 	bool touching() const { return g_atomic_int_get (const_cast<gint*>(&_touching)); }
 	bool writing() const { return _auto_state == Write; }
 	bool touch_enabled() const { return _auto_state & (Touch | Latch); }
