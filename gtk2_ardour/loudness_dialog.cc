@@ -79,7 +79,7 @@ LoudnessDialog::LoudnessPreset LoudnessDialog::presets[] =
 
 LoudnessDialog::LoudnessPreset LoudnessDialog::_preset = LoudnessDialog::presets [1];
 
-LoudnessDialog::LoudnessDialog (Session* s, AudioRange const& ar, bool as)
+LoudnessDialog::LoudnessDialog (Session* s, TimelineRange const& ar, bool as)
 	: ArdourDialog (as ? _("Loudness Assistant") : _("Loudness Analyzer and Normalizer"))
 	, _session (s)
 	, _range (ar)

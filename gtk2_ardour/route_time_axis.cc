@@ -1214,7 +1214,7 @@ RouteTimeAxisView::name_entry_changed (string const& str)
 }
 
 boost::shared_ptr<Region>
-RouteTimeAxisView::find_next_region (samplepos_t pos, RegionPoint point, int32_t dir)
+RouteTimeAxisView::find_next_region (timepos_t const & pos, RegionPoint point, int32_t dir)
 {
 	boost::shared_ptr<Playlist> pl = playlist ();
 
@@ -1225,8 +1225,8 @@ RouteTimeAxisView::find_next_region (samplepos_t pos, RegionPoint point, int32_t
 	return boost::shared_ptr<Region> ();
 }
 
-samplepos_t
-RouteTimeAxisView::find_next_region_boundary (samplepos_t pos, int32_t dir)
+timepos_t
+RouteTimeAxisView::find_next_region_boundary (timepos_t const & pos, int32_t dir)
 {
 	boost::shared_ptr<Playlist> pl = playlist ();
 
@@ -1234,7 +1234,7 @@ RouteTimeAxisView::find_next_region_boundary (samplepos_t pos, int32_t dir)
 		return pl->find_next_region_boundary (pos, dir);
 	}
 
-	return -1;
+	return timepos_t::max (pos.time_domain());
 }
 
 void
@@ -1288,7 +1288,7 @@ RouteTimeAxisView::cut_copy_clear (Selection& selection, CutCopyOp op)
 	case Delete:
 		if (playlist->cut (time) != 0) {
 			if (Config->get_edit_mode() == Ripple) {
-				playlist->ripple(time.start(), -time.length(), NULL);
+				playlist->ripple (time.start_time(), -time.length(), NULL);
 			}
 			// no need to exclude any regions from rippling here
 
@@ -1304,7 +1304,7 @@ RouteTimeAxisView::cut_copy_clear (Selection& selection, CutCopyOp op)
 		if ((what_we_got = playlist->cut (time)) != 0) {
 			_editor.get_cut_buffer().add (what_we_got);
 			if (Config->get_edit_mode() == Ripple) {
-				playlist->ripple(time.start(), -time.length(), NULL);
+				playlist->ripple (time.start_time(), -time.length(), NULL);
 			}
 			// no need to exclude any regions from rippling here
 
@@ -1324,7 +1324,7 @@ RouteTimeAxisView::cut_copy_clear (Selection& selection, CutCopyOp op)
 	case Clear:
 		if ((what_we_got = playlist->cut (time)) != 0) {
 			if (Config->get_edit_mode() == Ripple) {
-				playlist->ripple(time.start(), -time.length(), NULL);
+				playlist->ripple (time.start_time(), -time.length(), NULL);
 			}
 			// no need to exclude any regions from rippling here
 
@@ -1339,7 +1339,7 @@ RouteTimeAxisView::cut_copy_clear (Selection& selection, CutCopyOp op)
 }
 
 bool
-RouteTimeAxisView::paste (samplepos_t pos, const Selection& selection, PasteContext& ctx, const int32_t sub_num)
+RouteTimeAxisView::paste (timepos_t const & pos, const Selection& selection, PasteContext& ctx)
 {
 	if (!is_track()) {
 		return false;
@@ -1357,18 +1357,20 @@ RouteTimeAxisView::paste (samplepos_t pos, const Selection& selection, PasteCont
 	DEBUG_TRACE (DEBUG::CutNPaste, string_compose ("paste to %1\n", pos));
 
 	/* add multi-paste offset if applicable */
-	std::pair<samplepos_t, samplepos_t> extent  = (*p)->get_extent();
-	const samplecnt_t                  duration = extent.second - extent.first;
-	pos += _editor.get_paste_offset(pos, ctx.count, duration);
+	std::pair<timepos_t, timepos_t> extent  = (*p)->get_extent();
+	const timecnt_t                 duration = extent.first.distance (extent.second);
+
+	timepos_t ppos = pos;
+	ppos += _editor.get_paste_offset (ppos, ctx.count, duration);
 
 	pl->clear_changes ();
 	pl->clear_owned_changes ();
 	if (Config->get_edit_mode() == Ripple) {
-		std::pair<samplepos_t, samplepos_t> extent = (*p)->get_extent_with_endspace();
-		samplecnt_t amount = extent.second - extent.first;
-		pl->ripple(pos, amount * ctx.times, boost::shared_ptr<Region>());
+		std::pair<timepos_t, timepos_t> extent = (*p)->get_extent_with_endspace();
+		timecnt_t amount = extent.first.distance (extent.second);
+		pl->ripple (ppos, amount * ctx.times, boost::shared_ptr<Region>());
 	}
-	pl->paste (*p, pos, ctx.times, sub_num);
+	pl->paste (*p, ppos, ctx.times);
 
 	vector<Command*> cmds;
 	pl->rdiff (cmds);

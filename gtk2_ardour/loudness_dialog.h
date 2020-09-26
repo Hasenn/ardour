@@ -30,7 +30,7 @@
 #include "progress_reporter.h"
 
 namespace ARDOUR {
-	class AudioRange;
+	class TimelineRange;
 	class ExportStatus;
 	class PluginInsert;
 	class Processor;
@@ -40,7 +40,7 @@ namespace ARDOUR {
 class LoudnessDialog : public ArdourDialog
 {
 public:
-	LoudnessDialog (ARDOUR::Session*, ARDOUR::AudioRange const&, bool);
+	LoudnessDialog (ARDOUR::Session*, ARDOUR::TimelineRange const&, bool);
 	int run ();
 
 	float gain_db () const;
@@ -77,7 +77,7 @@ private:
 	static LoudnessPreset _preset;
 
 	ARDOUR::Session*                        _session;
-	ARDOUR::AudioRange const&               _range;
+	ARDOUR::TimelineRange const&               _range;
 	boost::shared_ptr<ARDOUR::ExportStatus> _status;
 	bool                                    _autostart;
 

@@ -320,7 +320,7 @@ Editor::do_import (vector<string>          paths,
                    SrcQuality              quality,
                    MidiTrackNameSource     midi_track_name_source,
                    MidiTempoMapDisposition smf_tempo_disposition,
-                   samplepos_t&            pos,
+                   timepos_t&              pos,
                    ARDOUR::PluginInfoPtr   instrument)
 {
 	boost::shared_ptr<Track> track;
@@ -451,7 +451,7 @@ Editor::do_import (vector<string>          paths,
 }
 
 void
-Editor::do_embed (vector<string> paths, ImportDisposition import_as, ImportMode mode, samplepos_t& pos, ARDOUR::PluginInfoPtr instrument)
+Editor::do_embed (vector<string> paths, ImportDisposition import_as, ImportMode mode, timepos_t& pos, ARDOUR::PluginInfoPtr instrument)
 {
 	boost::shared_ptr<Track> track;
 	bool check_sample_rate = true;

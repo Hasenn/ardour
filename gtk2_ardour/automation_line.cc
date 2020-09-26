@@ -84,15 +84,14 @@ AutomationLine::AutomationLine (const string&                              name,
                                 TimeAxisView&                              tv,
                                 ArdourCanvas::Item&                        parent,
                                 boost::shared_ptr<AutomationList>          al,
-                                const ParameterDescriptor&                 desc,
-                                Evoral::TimeConverter<double, samplepos_t>* converter)
+                                const ParameterDescriptor&                 desc)
 	: trackview (tv)
 	, _name (name)
 	, alist (al)
 	, _time_converter (converter ? converter : new Evoral::IdentityConverter<double, samplepos_t>)
 	, _parent_group (parent)
 	, _offset (0)
-	, _maximum_time (max_samplepos)
+	, _maximum_time (timepos_t::max (al->time_domain()))
 	, _fill (false)
 	, _desc (desc)
 {
@@ -1179,11 +1178,29 @@ AutomationLine::set_state (const XMLNode &node, int version)
 	return alist->set_state (node, version);
 }
 
-void
-AutomationLine::view_to_model_coord (double& x, double& y) const
+Temporal::timepos_t
+AutomationLine::view_to_model_coord (double x, double& y) const
 {
-	x = _time_converter->from (x);
+	assert (alist->time_style() != Temporal::BarTime);
+
 	view_to_model_coord_y (y);
+
+	Temporal::timepos_t w;
+
+	switch (alist->time_style()) {
+	case Temporal::AudioTime:
+		return timepos_t (samplepos_t (x));
+		break;
+	case Temporal::BeatTime:
+		return timepos_t (Beats::from_double (x));
+		break;
+	default:
+		/*NOTREACHED*/
+		break;
+	}
+
+	/*NOTREACHED*/
+	return timepos_t();
 }
 
 void
@@ -1252,11 +1269,12 @@ AutomationLine::model_to_view_coord_y (double& y) const
 	y = _desc.to_interface (y);
 }
 
-void
-AutomationLine::model_to_view_coord (double& x, double& y) const
+double
+AutomationLine::model_to_view_coord (Evoral::ControlEvent const & ev, double& y) const
 {
+	Temporal::timepos_t w (ev.when());
 	model_to_view_coord_y (y);
-	x = _time_converter->to (x) - _offset;
+	return (w).earlier (_offset).samples();
 }
 
 /** Called when our list has announced that its interpolation style has changed */
@@ -1337,7 +1355,7 @@ AutomationLine::memento_command_binder ()
  *  to the start of the track or region that it is on.
  */
 void
-AutomationLine::set_maximum_time (samplecnt_t t)
+AutomationLine::set_maximum_time (Temporal::timepos_t const & t)
 {
 	if (_maximum_time == t) {
 		return;
