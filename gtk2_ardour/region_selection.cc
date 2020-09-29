@@ -186,7 +186,7 @@ RegionSelection::add_to_layer (RegionView * rv)
 
 struct RegionSortByTime {
 	bool operator() (const RegionView* a, const RegionView* b) const {
-		return a->region()->position() < b->region()->position();
+		return a->region()->nt_position() < b->region()->nt_position();
 	}
 };
 
@@ -215,7 +215,7 @@ struct RegionSortByTrack {
 		/* really, track and position */
 
 		if (a->get_time_axis_view().order() == b->get_time_axis_view().order()) {
-			return a->region()->position() < b->region()->position();
+			return a->region()->nt_position() < b->region()->nt_position();
 		} else {
 			return a->get_time_axis_view().order() < b->get_time_axis_view().order();
 		}
