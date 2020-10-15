@@ -84,6 +84,7 @@ using namespace Gtk;
 using namespace Gtkmm2ext;
 using namespace Editing;
 using namespace ArdourCanvas;
+using namespace Temporal;
 
 using Gtkmm2ext::Keyboard;
 
@@ -94,7 +95,7 @@ DragManager::DragManager (Editor* e)
 	, _ending (false)
 	, _current_pointer_x (0.0)
 	, _current_pointer_y (0.0)
-	, _current_pointer_sample (0)
+	, _current_pointer_time (0)
 	, _old_follow_playhead (false)
 {
 }
@@ -157,7 +158,7 @@ DragManager::start_grab (GdkEvent* e, Gdk::Cursor* c)
 	_old_follow_playhead = _editor->follow_playhead ();
 	_editor->set_follow_playhead (false);
 
-	_current_pointer_sample = _editor->canvas_event_sample (e, &_current_pointer_x, &_current_pointer_y);
+	_current_pointer_time = timepos_t (_editor->canvas_event_sample (e, &_current_pointer_x, &_current_pointer_y));
 
 	for (list<Drag*>::const_iterator i = _drags.begin(); i != _drags.end(); ++i) {
 		if ((*i)->grab_button() < 0) {
@@ -221,7 +222,7 @@ DragManager::motion_handler (GdkEvent* e, bool from_autoscroll)
 	 * Can we guarantee that this is true?
 	 */
 
-	_current_pointer_sample = _editor->canvas_event_sample (e, &_current_pointer_x, &_current_pointer_y);
+	_current_pointer_time = timepos_t (_editor->canvas_event_sample (e, &_current_pointer_x, &_current_pointer_y));
 
 	for (list<Drag*>::iterator i = _drags.begin(); i != _drags.end(); ++i) {
 		bool const t = (*i)->motion_handler (e, from_autoscroll);
@@ -252,8 +253,8 @@ Drag::Drag (Editor* e, ArdourCanvas::Item* i, bool trackview_only)
 	: _editor (e)
 	, _drags (0)
 	, _item (i)
-	, _pointer_sample_offset (0)
-	, _video_sample_offset (0)
+	, _pointer_offset (0)
+	, _video_offset (0)
 	, _preview_video (false)
 	, _x_constrained (false)
 	, _y_constrained (false)
@@ -267,11 +268,7 @@ Drag::Drag (Editor* e, ArdourCanvas::Item* i, bool trackview_only)
 	, _grab_y (0.0)
 	, _last_pointer_x (0.0)
 	, _last_pointer_y (0.0)
-	, _raw_grab_sample (0)
-	, _grab_sample (0)
-	, _last_pointer_sample (0)
 	, _snap_delta (0)
-	, _snap_delta_music (0.0)
 	, _constraint_pressed (false)
 	, _grab_button (-1)
 {
@@ -296,20 +293,19 @@ Drag::swap_grab (ArdourCanvas::Item* new_item, Gdk::Cursor* cursor, uint32_t /*t
 void
 Drag::start_grab (GdkEvent* event, Gdk::Cursor *cursor)
 {
-
 	/* we set up x/y dragging constraints on first move */
 	_constraint_pressed = ArdourKeyboard::indicates_constraint (event->button.state);
 
-	_raw_grab_sample = _editor->canvas_event_sample (event, &_grab_x, &_grab_y);
+	_raw_grab_time = timepos_t (_editor->canvas_event_sample (event, &_grab_x, &_grab_y));
 	_grab_button = event->button.button;
 
-	setup_pointer_sample_offset ();
-	setup_video_sample_offset ();
+	setup_pointer_offset ();
+	setup_video_offset ();
 	if (! UIConfiguration::instance ().get_preview_video_frame_on_drag ()) {
 		_preview_video = false;
 	}
-	_grab_sample = adjusted_sample (_raw_grab_sample, event).sample;
-	_last_pointer_sample = _grab_sample;
+	_grab_time = adjusted_time (_raw_grab_time, event);
+	_last_pointer_time = _grab_time;
 	_last_pointer_x = _grab_x;
 
 	if (_trackview_only) {
@@ -357,13 +353,13 @@ Drag::end_grab (GdkEvent* event)
 	return _move_threshold_passed;
 }
 
-MusicSample
-Drag::adjusted_sample (samplepos_t f, GdkEvent const * event, bool snap) const
+timepos_t
+Drag::adjusted_time (timepos_t const & f, GdkEvent const * event, bool snap) const
 {
-	MusicSample pos (0, 0);
+	timepos_t pos (f);
 
-	if (f > _pointer_sample_offset) {
-		pos.sample = f - _pointer_sample_offset;
+	if (f > _pointer_offset) {
+		pos.shift_earlier (_pointer_offset);
 	}
 
 	if (snap) {
@@ -373,29 +369,30 @@ Drag::adjusted_sample (samplepos_t f, GdkEvent const * event, bool snap) const
 	return pos;
 }
 
-samplepos_t
-Drag::adjusted_current_sample (GdkEvent const * event, bool snap) const
+timepos_t
+Drag::adjusted_current_time (GdkEvent const * event, bool snap) const
 {
-	return adjusted_sample (_drags->current_pointer_sample (), event, snap).sample;
+	return adjusted_time (_drags->current_pointer_time (), event, snap);
 }
 
-sampleoffset_t
+timecnt_t
 Drag::snap_delta (guint state) const
 {
 	if (ArdourKeyboard::indicates_snap_delta (state)) {
 		return _snap_delta;
 	}
 
-	return 0;
+	return timecnt_t();
 }
-double
+
+Beats
 Drag::snap_delta_music (guint state) const
 {
 	if (ArdourKeyboard::indicates_snap_delta (state)) {
 		return _snap_delta_music;
 	}
 
-	return 0.0;
+	return Beats();
 }
 
 double
@@ -415,17 +412,16 @@ Drag::current_pointer_y () const
 }
 
 void
-Drag::setup_snap_delta (MusicSample pos)
+Drag::setup_snap_delta (timepos_t const & pos)
 {
-	TempoMap& map (_editor->session()->tempo_map());
-	MusicSample snap (pos);
+	timepos_t snap (pos);
 	_editor->snap_to (snap, Temporal::RoundNearest, ARDOUR::SnapToAny_Visual, true);
-	_snap_delta = snap.sample - pos.sample;
+	_snap_delta = pos.distance (snap);
 
-	_snap_delta_music = 0.0;
+	_snap_delta_music = Temporal::Beats();
 
 	if (_snap_delta != 0) {
-		_snap_delta_music = map.exact_qn_at_sample (snap.sample, snap.division) - map.exact_qn_at_sample (pos.sample, pos.division);
+		_snap_delta_music = snap.beats() - pos.beats();
 	}
 }
 
@@ -439,13 +435,13 @@ Drag::motion_handler (GdkEvent* event, bool from_autoscroll)
 		return false;
 	}
 
-	pair<samplecnt_t, int> const threshold = move_threshold ();
+	pair<timecnt_t, int> const threshold = move_threshold ();
 
 	bool const old_move_threshold_passed = _move_threshold_passed;
 
 	if (!_move_threshold_passed) {
 
-		bool const xp = (::llabs (_drags->current_pointer_sample () - _raw_grab_sample) >= threshold.first);
+		bool const xp = (_raw_grab_time.distance (_drags->current_pointer_time ()).abs() >= threshold.first);
 		bool const yp = (::fabs ((current_pointer_y () - _grab_y)) >= threshold.second);
 
 		_move_threshold_passed = ((xp && x_movement_matters()) || (yp && y_movement_matters()));
@@ -516,7 +512,7 @@ Drag::motion_handler (GdkEvent* event, bool from_autoscroll)
 
 				_last_pointer_x = _drags->current_pointer_x ();
 				_last_pointer_y = current_pointer_y ();
-				_last_pointer_sample = adjusted_current_sample (event, false);
+				_last_pointer_time = adjusted_current_time (event, false);
 			}
 
 			return true;
@@ -541,16 +537,16 @@ Drag::abort ()
 }
 
 void
-Drag::show_verbose_cursor_time (samplepos_t sample)
+Drag::show_verbose_cursor_time (timepos_t const & pos)
 {
-	_editor->verbose_cursor()->set_time (sample);
+	_editor->verbose_cursor()->set_time (pos.samples());
 	_editor->verbose_cursor()->show ();
 }
 
 void
-Drag::show_verbose_cursor_duration (samplepos_t start, samplepos_t end, double /*xoffset*/)
+Drag::show_verbose_cursor_duration (timepos_t const & start, timepos_t const & end, double /*xoffset*/)
 {
-	_editor->verbose_cursor()->set_duration (start, end);
+	_editor->verbose_cursor()->set_duration (start.samples(), end.samples());
 	_editor->verbose_cursor()->show ();
 }
 
@@ -562,10 +558,10 @@ Drag::show_verbose_cursor_text (string const & text)
 }
 
 void
-Drag::show_view_preview (samplepos_t sample)
+Drag::show_view_preview (timepos_t const & pos)
 {
 	if (_preview_video) {
-		ARDOUR_UI::instance()->video_timeline->manual_seek_video_monitor (sample);
+		ARDOUR_UI::instance()->video_timeline->manual_seek_video_monitor (pos.samples());
 	}
 }
 
@@ -573,13 +569,12 @@ boost::shared_ptr<Region>
 Drag::add_midi_region (MidiTimeAxisView* view, bool commit)
 {
 	if (_editor->session()) {
-		const TempoMap& map (_editor->session()->tempo_map());
-		samplecnt_t pos = grab_sample();
+		const timepos_t pos (grab_time());
 		/* not that the frame rate used here can be affected by pull up/down which
 		   might be wrong.
 		*/
-		samplecnt_t len = map.sample_at_beat (max (0.0, map.beat_at_sample (pos)) + 1.0) - pos;
-		return view->add_region (grab_sample(), len, commit);
+		timecnt_t len = pos.distance (max (timepos_t::zero (Temporal::BeatTime), timepos_t (pos.beats() + Beats (1, 0))));
+		return view->add_region (grab_time(), len, commit);
 	}
 
 	return boost::shared_ptr<Region>();
@@ -659,17 +654,17 @@ RegionDrag::find_time_axis_view (TimeAxisView* t) const
 }
 
 void
-RegionDrag::setup_video_sample_offset ()
+RegionDrag::setup_video_offset ()
 {
 	if (_views.empty ()) {
 		_preview_video = true;
 		return;
 	}
-	samplepos_t first_sync = _views.begin()->view->region()->sync_position ();
+	timepos_t first_sync = _views.begin()->view->region()->sync_position ();
 	for (list<DraggingView>::const_iterator i = _views.begin(); i != _views.end(); ++i) {
 		first_sync = std::min (first_sync, i->view->region()->sync_position ());
 	}
-	_video_sample_offset = first_sync + _pointer_sample_offset - raw_grab_sample ();
+	_video_offset = raw_grab_time().distance (first_sync + _pointer_offset);
 	_preview_video = true;
 }
 
@@ -677,7 +672,6 @@ RegionMotionDrag::RegionMotionDrag (Editor* e, ArdourCanvas::Item* i, RegionView
 	: RegionDrag (e, i, p, v)
 	, _brushing (b)
 	, _ignore_video_lock (false)
-	, _last_position (0, 0)
 	, _total_x_delta (0)
 	, _last_pointer_time_axis_view (0)
 	, _last_pointer_layer (0)
@@ -694,8 +688,8 @@ RegionMotionDrag::start_grab (GdkEvent* event, Gdk::Cursor* cursor)
 	Drag::start_grab (event, cursor);
 	setup_snap_delta (_last_position);
 
-	show_verbose_cursor_time (_last_position.sample);
-	show_view_preview (_last_position.sample + _video_sample_offset);
+	show_verbose_cursor_time (_last_position);
+	show_view_preview (_last_position + _video_offset);
 
 	pair<TimeAxisView*, double> const tv = _editor->trackview_by_y_position (current_pointer_y ());
 	if (tv.first) {
@@ -715,66 +709,66 @@ RegionMotionDrag::start_grab (GdkEvent* event, Gdk::Cursor* cursor)
 }
 
 double
-RegionMotionDrag::compute_x_delta (GdkEvent const * event, MusicSample* pending_region_position)
+RegionMotionDrag::compute_x_delta (GdkEvent const * event, Temporal::timepos_t & pending_region_position)
 {
 	/* compute the amount of pointer motion in samples, and where
 	   the region would be if we moved it by that much.
 	*/
 	if (_x_constrained) {
-		*pending_region_position = _last_position;
+		pending_region_position = _last_position;
 		return 0.0;
 	}
 
-	*pending_region_position = adjusted_sample (_drags->current_pointer_sample (), event, false);
+	pending_region_position = adjusted_time (_drags->current_pointer_time (), event, false);
 
-	samplecnt_t sync_offset;
+	timecnt_t sync_offset;
 	int32_t sync_dir;
 
 	sync_offset = _primary->region()->sync_offset (sync_dir);
 
 	/* we don't handle a sync point that lies before zero.
 	 */
-	if (sync_dir >= 0 || (sync_dir < 0 && pending_region_position->sample >= sync_offset)) {
+	if (sync_dir >= 0 || (sync_dir < 0 && pending_region_position >= sync_offset)) {
 
-		samplecnt_t const sd = snap_delta (event->button.state);
-		MusicSample sync_snap (pending_region_position->sample + (sync_dir * sync_offset) + sd, 0);
+		timecnt_t const sd = snap_delta (event->button.state);
+		timepos_t sync_snap (pending_region_position + (sync_offset * sync_dir) + sd);
 		_editor->snap_to_with_modifier (sync_snap, event);
-		if (sync_offset == 0 && sd == 0) {
-			*pending_region_position = sync_snap;
+		if (sync_offset.zero() && sd.zero()) {
+			pending_region_position = sync_snap;
 		} else {
-			pending_region_position->set (_primary->region()->adjust_to_sync (sync_snap.sample) - sd, 0);
+			pending_region_position = _primary->region()->adjust_to_sync (sync_snap).earlier (sd);
 		}
 	} else {
-		*pending_region_position = _last_position;
+		pending_region_position = _last_position;
 	}
 
-	if (pending_region_position->sample > max_samplepos - _primary->region()->length()) {
-		*pending_region_position = _last_position;
+	if (pending_region_position > timepos_t::max (pending_region_position.time_domain()).earlier (_primary->region()->nt_length())) {
+		pending_region_position = _last_position;
 	}
 
 	double dx = 0;
 
 	bool const x_move_allowed = !_x_constrained;
 
-	if ((pending_region_position->sample != _last_position.sample) && x_move_allowed) {
+	if ((pending_region_position != _last_position) && x_move_allowed) {
 
 		/* x movement since last time (in pixels) */
-		dx = _editor->sample_to_pixel_unrounded (pending_region_position->sample - _last_position.sample);
+		dx = _editor->duration_to_pixels_unrounded (_last_position.distance (pending_region_position));
 
 		/* total x movement */
-		samplecnt_t total_dx = _editor->pixel_to_sample (_total_x_delta + dx);
+		timecnt_t total_dx = timecnt_t (samplepos_t (_editor->pixel_to_sample (_total_x_delta + dx)), grab_time());
 
 		for (list<DraggingView>::const_iterator i = _views.begin(); i != _views.end(); ++i) {
-			sampleoffset_t const off = i->view->region()->position() + total_dx;
-			if (off < 0) {
-				dx = dx - _editor->sample_to_pixel_unrounded (off);
-				*pending_region_position = MusicSample (pending_region_position->sample - off, 0);
+			const timepos_t off = i->view->region()->nt_position() + total_dx;
+			if (off.negative()) {
+				dx = dx - _editor->time_to_pixel_unrounded (off);
+				pending_region_position = pending_region_position.earlier (timecnt_t (off, timepos_t (pending_region_position.time_domain())));
 				break;
 			}
 		}
 	}
 
-	_editor->set_snapped_cursor_position(pending_region_position->sample);
+	_editor->set_snapped_cursor_position (pending_region_position);
 
 	return dx;
 }
@@ -1010,12 +1004,11 @@ RegionMotionDrag::motion (GdkEvent* event, bool first_move)
 	}
 
 	/* Work out the change in x */
-	TempoMap& tmap = _editor->session()->tempo_map();
-	MusicSample pending_region_position (0, 0);
-	double const x_delta = compute_x_delta (event, &pending_region_position);
+	timepos_t pending_region_position;
+	double const x_delta = compute_x_delta (event, pending_region_position);
 
-	double const last_pos_qn = tmap.exact_qn_at_sample (_last_position.sample, _last_position.division);
-	double const qn_delta = tmap.exact_qn_at_sample (pending_region_position.sample, pending_region_position.division) - last_pos_qn;
+	Temporal::Beats const last_pos_qn = _last_position.beats();
+	Temporal::Beats const qn_delta = pending_region_position.beats() - last_pos_qn;
 
 	_last_position = pending_region_position;
 
@@ -1220,7 +1213,7 @@ RegionMotionDrag::motion (GdkEvent* event, bool first_move)
 			i->layer += this_delta_layer;
 
 			if (_brushing) {
-				_editor->mouse_brush_insert_region (rv, pending_region_position.sample);
+				_editor->mouse_brush_insert_region (rv, pending_region_position);
 			} else {
 				Duple track_origin;
 
@@ -1260,11 +1253,9 @@ RegionMotionDrag::motion (GdkEvent* event, bool first_move)
 		}
 
 		/* Now move the region view */
-		if (rv->region()->position_lock_style() == MusicTime) {
-			double const last_qn = tmap.quarter_note_at_sample (rv->get_position());
-			samplepos_t const x_pos_music = tmap.sample_at_quarter_note (last_qn + qn_delta);
-
-			rv->set_position (x_pos_music, 0);
+		if (rv->region()->position_time_domain() == Temporal::BeatTime) {
+			Temporal::Beats const last_qn = rv->get_position().beats();
+			rv->set_position (timepos_t (last_qn + qn_delta), 0);
 			rv->move (0, y_delta);
 		} else {
 			rv->move (x_delta, y_delta);
@@ -1275,8 +1266,8 @@ RegionMotionDrag::motion (GdkEvent* event, bool first_move)
 	_total_x_delta += x_delta;
 
 	if (x_delta != 0 && !_brushing) {
-		show_verbose_cursor_time (_last_position.sample);
-		show_view_preview (_last_position.sample + _video_sample_offset);
+		show_verbose_cursor_time (_last_position);
+		show_view_preview (_last_position + _video_offset);
 	}
 
 	/* keep track of pointer movement */
@@ -1464,7 +1455,7 @@ RegionMoveDrag::finished (GdkEvent* ev, bool movement_occurred)
 		i->view->get_canvas_group()->show ();
 	}
 
-	bool const changed_position = (_last_position.sample != _primary->region()->position());
+	bool const changed_position = (_last_position != _primary->region()->nt_position());
 	bool const changed_tracks = (_time_axis_views[_views.front().time_axis_view] != &_views.front().view->get_time_axis_view());
 
 	if (_copy) {
@@ -1502,11 +1493,11 @@ RegionMoveDrag::create_destination_time_axis (boost::shared_ptr<Region> region, 
 	try {
 		if (boost::dynamic_pointer_cast<AudioRegion> (region)) {
 			list<boost::shared_ptr<AudioTrack> > audio_tracks;
-			uint32_t output_chan = region->n_channels();
+			uint32_t output_chan = region->sources().size();
 			if ((Config->get_output_auto_connect() & AutoConnectMaster) && _editor->session()->master_out()) {
 				output_chan =  _editor->session()->master_out()->n_inputs().n_audio();
 			}
-			audio_tracks = _editor->session()->new_audio_track (region->n_channels(), output_chan, 0, 1, region->name(), PresentationInfo::max_order);
+			audio_tracks = _editor->session()->new_audio_track (region->sources().size(), output_chan, 0, 1, region->name(), PresentationInfo::max_order);
 			tav =_editor->time_axis_view_from_stripable (audio_tracks.front());
 		} else {
 			ChanCount one_midi_port (DataType::MIDI, 1);
@@ -1530,16 +1521,12 @@ RegionMoveDrag::create_destination_time_axis (boost::shared_ptr<Region> region, 
 }
 
 void
-RegionMoveDrag::finished_copy (bool const changed_position, bool const /*changed_tracks*/, MusicSample last_position, int32_t const ev_state)
+RegionMoveDrag::finished_copy (bool const changed_position, bool const /*changed_tracks*/, timepos_t const & last_position, int32_t const ev_state)
 {
 	RegionSelection new_views;
 	PlaylistSet modified_playlists;
 	RouteTimeAxisView* new_time_axis_view = 0;
-	samplecnt_t const drag_delta = _primary->region()->position() - _last_position.sample;
-
-	TempoMap& tmap (_editor->session()->tempo_map());
-	const double last_pos_qn = tmap.exact_qn_at_sample (last_position.sample, last_position.division);
-	const double qn_delta = _primary->region()->quarter_note() - last_pos_qn;
+	timecnt_t const drag_delta = _last_position.distance (_primary->region()->nt_position());
 
 	if (_brushing) {
 		/* all changes were made during motion event handlers */
@@ -1565,16 +1552,12 @@ RegionMoveDrag::finished_copy (bool const changed_position, bool const /*changed
 			continue;
 		}
 
-		MusicSample where (0, 0);
-		double quarter_note;
+		timepos_t where;
 
 		if (changed_position && !_x_constrained) {
-			where.set (i->view->region()->position() - drag_delta, 0);
-			quarter_note = i->view->region()->quarter_note() - qn_delta;
+			where = timepos_t (i->view->region()->nt_position().earlier (drag_delta));
 		} else {
-			/* region has not moved - divisor will not affect musical pos */
-			where.set (i->view->region()->position(), 0);
-			quarter_note = i->view->region()->quarter_note();
+			where = timepos_t (i->view->region()->nt_position());
 		}
 
 		if (i->time_axis_view < 0 || i->time_axis_view >= (int)_time_axis_views.size()) {
@@ -1603,14 +1586,14 @@ RegionMoveDrag::finished_copy (bool const changed_position, bool const /*changed
 		if (dest_rtv != 0) {
 			RegionView* new_view;
 			if (i->view == _primary && !_x_constrained) {
-				new_view = insert_region_into_playlist (i->view->region(), dest_rtv, i->layer, last_position, last_pos_qn,
+				new_view = insert_region_into_playlist (i->view->region(), dest_rtv, i->layer, last_position,
 									modified_playlists, true);
 			} else {
-				if (i->view->region()->position_lock_style() == AudioTime) {
-					new_view = insert_region_into_playlist (i->view->region(), dest_rtv, i->layer, where, quarter_note,
+				if (i->view->region()->position_time_domain() == Temporal::AudioTime) {
+					new_view = insert_region_into_playlist (i->view->region(), dest_rtv, i->layer, where,
 										modified_playlists);
 				} else {
-					new_view = insert_region_into_playlist (i->view->region(), dest_rtv, i->layer, where, quarter_note,
+					new_view = insert_region_into_playlist (i->view->region(), dest_rtv, i->layer, where,
 										modified_playlists, true);
 				}
 			}
@@ -1648,7 +1631,7 @@ void
 RegionMoveDrag::finished_no_copy (
 	bool const changed_position,
 	bool const changed_tracks,
-	MusicSample last_position,
+	timepos_t const & last_position,
 	int32_t const ev_state
 	)
 {
@@ -1657,14 +1640,10 @@ RegionMoveDrag::finished_no_copy (
 	PlaylistSet frozen_playlists;
 	set<RouteTimeAxisView*> views_to_update;
 	RouteTimeAxisView* new_time_axis_view = 0;
-	samplecnt_t const drag_delta = _primary->region()->position() - last_position.sample;
+	timecnt_t const drag_delta = last_position.distance (_primary->region()->nt_position());
 
 	typedef map<boost::shared_ptr<Playlist>, RouteTimeAxisView*> PlaylistMapping;
 	PlaylistMapping playlist_mapping;
-
-	TempoMap& tmap (_editor->session()->tempo_map());
-	const double last_pos_qn = tmap.exact_qn_at_sample (last_position.sample, last_position.division);
-	const double qn_delta = _primary->region()->quarter_note() - last_pos_qn;
 
 	std::set<boost::shared_ptr<const Region> > uniq;
 	for (list<DraggingView>::const_iterator i = _views.begin(); i != _views.end(); ) {
@@ -1714,15 +1693,12 @@ RegionMoveDrag::finished_no_copy (
 
 		views_to_update.insert (dest_rtv);
 
-		MusicSample where (0, 0);
-		double quarter_note;
+		timepos_t where;
 
 		if (changed_position && !_x_constrained) {
-			where.set (rv->region()->position() - drag_delta, 0);
-			quarter_note = i->view->region()->quarter_note() - qn_delta;
+			where = rv->region()->nt_position().earlier (drag_delta);
 		} else {
-			where.set (rv->region()->position(), 0);
-			quarter_note = i->view->region()->quarter_note();
+			where = rv->region()->nt_position();
 		}
 
 		if (changed_tracks) {
@@ -1731,21 +1707,15 @@ RegionMoveDrag::finished_no_copy (
 			RegionView* new_view;
 			if (rv == _primary && !_x_constrained) {
 				new_view = insert_region_into_playlist (
-					RegionFactory::create (rv->region (), true), dest_rtv, dest_layer, last_position, last_pos_qn,
-					modified_playlists, true
-					);
+					RegionFactory::create (rv->region (), true), dest_rtv, dest_layer, last_position,modified_playlists, true);
 			} else {
-				if (rv->region()->position_lock_style() == AudioTime) {
+				if (rv->region()->position_time_domain() == Temporal::AudioTime) {
 
 					new_view = insert_region_into_playlist (
-						RegionFactory::create (rv->region (), true), dest_rtv, dest_layer, where, quarter_note,
-						modified_playlists
-						);
+						RegionFactory::create (rv->region (), true), dest_rtv, dest_layer, where, modified_playlists);
 				} else {
 					new_view = insert_region_into_playlist (
-						RegionFactory::create (rv->region (), true), dest_rtv, dest_layer, where, quarter_note,
-						modified_playlists, true
-						);
+						RegionFactory::create (rv->region (), true), dest_rtv, dest_layer, where, modified_playlists, true);
 				}
 			}
 
@@ -1805,17 +1775,9 @@ RegionMoveDrag::finished_no_copy (
 			if (r.second) {
 				playlist->freeze ();
 			}
-			if (rv == _primary) {
-				rv->region()->set_position (where.sample, last_position.division);
-			} else {
-				if (rv->region()->position_lock_style() == AudioTime) {
-					/* move by sample offset */
-					rv->region()->set_position (where.sample, 0);
-				} else {
-					/* move by music offset */
-					rv->region()->set_position (rv->region()->quarter_note() - qn_delta);
-				}
-			}
+
+			rv->region()->set_position (where);
+
 			_editor->session()->add_command (new StatefulDiffCommand (rv->region()));
 		}
 
@@ -1917,8 +1879,7 @@ RegionMoveDrag::insert_region_into_playlist (
 	boost::shared_ptr<Region> region,
 	RouteTimeAxisView*        dest_rtv,
 	layer_t                   dest_layer,
-	MusicSample                where,
-	double                    quarter_note,
+	timepos_t const &         where,
 	PlaylistSet&              modified_playlists,
 	bool                      for_music
 	)
@@ -1937,11 +1898,8 @@ RegionMoveDrag::insert_region_into_playlist (
 	if (r.second) {
 		dest_playlist->clear_changes ();
 	}
-	if (for_music) {
-		dest_playlist->add_region (region, where.sample, 1.0, false, where.division, quarter_note, true);
-	} else {
-		dest_playlist->add_region (region, where.sample, 1.0, false, where.division);
-	}
+
+	dest_playlist->add_region (region, where, 1.0, for_music);
 
 	if (dest_rtv->view()->layer_display() == Stacked || dest_rtv->view()->layer_display() == Expanded) {
 		dest_playlist->set_layer (region, dest_layer);
@@ -2030,16 +1988,16 @@ RegionMoveDrag::RegionMoveDrag (Editor* e, ArdourCanvas::Item* i, RegionView* p,
 {
 	DEBUG_TRACE (DEBUG::Drags, "New RegionMoveDrag\n");
 
-	_last_position = MusicSample (_primary->region()->position(), 0);
+	_last_position = _primary->region()->nt_position();
 }
 
 void
-RegionMoveDrag::setup_pointer_sample_offset ()
+RegionMoveDrag::setup_pointer_offset ()
 {
-	_pointer_sample_offset = raw_grab_sample() - _last_position.sample;
+	_pointer_offset = timecnt_t (_last_position.distance (raw_grab_time()), _last_position);
 }
 
-RegionInsertDrag::RegionInsertDrag (Editor* e, boost::shared_ptr<Region> r, RouteTimeAxisView* v, samplepos_t pos)
+RegionInsertDrag::RegionInsertDrag (Editor* e, boost::shared_ptr<Region> r, RouteTimeAxisView* v, timepos_t const & pos)
 	: RegionMotionDrag (e, 0, 0, list<RegionView*> (), false)
 {
 	DEBUG_TRACE (DEBUG::Drags, "New RegionInsertDrag\n");
@@ -2053,7 +2011,7 @@ RegionInsertDrag::RegionInsertDrag (Editor* e, boost::shared_ptr<Region> r, Rout
 	_primary->set_position (pos, 0);
 	_views.push_back (DraggingView (_primary, this, v));
 
-	_last_position = MusicSample (pos, 0);
+	_last_position = pos;
 
 	_item = _primary->get_canvas_group ();
 }
@@ -2075,11 +2033,11 @@ RegionInsertDrag::finished (GdkEvent * event, bool)
 	playlist->clear_changes ();
 	_editor->snap_to_with_modifier (_last_position, event);
 
-	playlist->add_region (_primary->region (), _last_position.sample, 1.0, false, _last_position.division);
+	playlist->add_region (_primary->region (), _last_position, 1.0, false);
 
 	// Mixbus doesn't seem to ripple when inserting regions from the list: should we? yes, probably
 	if (Config->get_edit_mode() == Ripple) {
-		playlist->ripple (_last_position.sample, _primary->region()->length(), _primary->region());
+		playlist->ripple (_last_position, _primary->region()->nt_length(), _primary->region());
 	}
 
 	_editor->session()->add_command (new StatefulDiffCommand (playlist));
@@ -2106,7 +2064,7 @@ RegionSpliceDrag::RegionSpliceDrag (Editor* e, ArdourCanvas::Item* i, RegionView
 
 struct RegionSelectionByPosition {
 	bool operator() (RegionView*a, RegionView* b) {
-		return a->region()->position () < b->region()->position();
+		return a->region()->nt_position () < b->region()->nt_position();
 	}
 };
 
@@ -2143,7 +2101,7 @@ RegionSpliceDrag::motion (GdkEvent* event, bool)
 	RegionSelection copy;
 	_editor->selection->regions.by_position(copy);
 
-	samplepos_t const pf = adjusted_current_sample (event);
+	timepos_t const pos = adjusted_current_time (event);
 
 	for (RegionSelection::iterator i = copy.begin(); i != copy.end(); ++i) {
 
@@ -2164,11 +2122,11 @@ RegionSpliceDrag::motion (GdkEvent* event, bool)
 		}
 
 		if (dir > 0) {
-			if (pf < (*i)->region()->last_sample() + 1) {
+			if (pos < (*i)->region()->nt_end()) {
 				continue;
 			}
 		} else {
-			if (pf > (*i)->region()->first_sample()) {
+			if (pos > (*i)->region()->nt_position()) {
 				continue;
 			}
 		}
@@ -2195,15 +2153,15 @@ RegionSpliceDrag::aborted (bool)
  */
 
 void
-RegionRippleDrag::add_all_after_to_views(TimeAxisView *tav, samplepos_t where, const RegionSelection &exclude, bool drag_in_progress)
+RegionRippleDrag::add_all_after_to_views(TimeAxisView *tav, timepos_t const & where, const RegionSelection &exclude, bool drag_in_progress)
 {
 
-	boost::shared_ptr<RegionList> rl = tav->playlist()->regions_with_start_within (Evoral::Range<samplepos_t>(where, max_samplepos));
+	boost::shared_ptr<RegionList> rl = tav->playlist()->regions_with_start_within (TimelineRange (where, timepos_t::max (where.time_domain()), 0));
 
 	RouteTimeAxisView* rtv = dynamic_cast<RouteTimeAxisView*>(tav);
 	RegionSelection to_ripple;
 	for (RegionList::iterator i = rl->begin(); i != rl->end(); ++i) {
-		if ((*i)->position() >= where) {
+		if ((*i)->nt_position() >= where) {
 			to_ripple.push_back (rtv->view()->find_view(*i));
 		}
 	}
@@ -2235,7 +2193,7 @@ RegionRippleDrag::add_all_after_to_views(TimeAxisView *tav, samplepos_t where, c
 }
 
 void
-RegionRippleDrag::remove_unselected_from_views(samplecnt_t amount, bool move_regions)
+RegionRippleDrag::remove_unselected_from_views(timecnt_t const & amount, bool move_regions)
 {
 
 	for (std::list<DraggingView>::iterator i = _views.begin(); i != _views.end(); ) {
@@ -2259,10 +2217,11 @@ RegionRippleDrag::remove_unselected_from_views(samplecnt_t amount, bool move_reg
 
 			if (move_regions) {
 				// move the underlying region to match the view
-				rv->region()->set_position (rv->region()->position() + amount);
+				rv->region()->set_position (rv->region()->nt_position() + amount);
 			} else {
 				// restore the view to match the underlying region's original position
-				rv->move(-amount, 0); // second parameter is y delta - seems 0 is OK
+#warning NUTEMPO ALERT paul test this code in 5.x /* how can this work ... amount used to be in samples but ::move() expect pixels */
+				//rv->move(-amount, 0);	// second parameter is y delta - seems 0 is OK
 			}
 
 			rv->set_height (rtv->view()->child_height ());
@@ -2290,7 +2249,7 @@ RegionRippleDrag::RegionRippleDrag (Editor* e, ArdourCanvas::Item* i, RegionView
 	DEBUG_TRACE (DEBUG::Drags, "New RegionRippleDrag\n");
 	// compute length of selection
 	RegionSelection selected_regions = _editor->selection->regions;
-	selection_length = selected_regions.end_sample() - selected_regions.start();
+	selection_length = selected_regions.start_time().distance (selected_regions.end_time());
 
 	// Rippling accross tracks disabled. Rippling on all tracks is the way to go in the future.
 	allow_moves_across_tracks = false; // (selected_regions.playlists().size() == 1);
@@ -2321,7 +2280,7 @@ RegionRippleDrag::RegionRippleDrag (Editor* e, ArdourCanvas::Item* i, RegionView
 		assert (first_selected_on_this_track); // we should always find the region in one of the playlists...
 		add_all_after_to_views (
 				&first_selected_on_this_track->get_time_axis_view(),
-				first_selected_on_this_track->region()->position(),
+				first_selected_on_this_track->region()->nt_position(),
 				selected_regions, false);
 	}
 
@@ -2356,17 +2315,18 @@ RegionRippleDrag::motion (GdkEvent* event, bool first_move)
 		return;
 	}
 
-	samplepos_t where = adjusted_current_sample (event);
-	assert (where >= 0);
-	MusicSample after (0, 0);
-	double delta = compute_x_delta (event, &after);
+	timepos_t where = adjusted_current_time (event);
+	assert (!where.negative());
+	timepos_t after;
+	double delta = compute_x_delta (event, after);
 
-	samplecnt_t amount = _editor->pixel_to_sample (delta);
+	timecnt_t amount = timecnt_t (_editor->pixel_to_sample (delta), grab_time());
 
 	if (allow_moves_across_tracks) {
 		// all the originally selected regions were on the same track
 
-		samplecnt_t adjust = 0;
+		timecnt_t adjust;
+
 		if (prev_tav && tv != prev_tav) {
 			// dragged onto a different track
 			// remove the unselected regions from _views, restore them to their original positions
@@ -2451,8 +2411,8 @@ RegionRippleDrag::finished (GdkEvent* event, bool movement_occurred)
 					}
 				}
 				if (!found) {
-					const samplecnt_t pos_after = r->position();
-					const samplecnt_t pos_before = pos_after + selection_length;
+					const timepos_t pos_after = r->nt_position();
+					const timepos_t pos_before = pos_after + selection_length;
 					r->set_position(pos_before);
 					r->clear_changes();
 					r->set_position(pos_after);
@@ -2521,14 +2481,14 @@ RegionCreateDrag::motion (GdkEvent* event, bool first_move)
 	} else {
 
 		if (_region) {
-			samplepos_t const f = adjusted_current_sample (event);
-			if (f <= grab_sample()) {
-				_region->set_initial_position (f);
+			timepos_t const pos = adjusted_current_time (event);
+			if (pos <= grab_time()) {
+				_region->set_initial_position (pos);
 			}
 
-			if (f != grab_sample()) {
-				samplecnt_t const len = ::llabs (f - grab_sample ());
-				_region->set_length (len, _editor->get_grid_music_divisions (event->button.state));
+			if (pos != grab_time()) {
+				timecnt_t const len = grab_time().distance (pos).abs();
+				_region->set_length (len);
 			}
 		}
 	}
@@ -2773,7 +2733,7 @@ NoteResizeDrag::aborted (bool)
 AVDraggingView::AVDraggingView (RegionView* v)
 	: view (v)
 {
-	initial_position = v->region()->position ();
+	initial_position = v->region()->position_sample();
 }
 
 VideoTimeLineDrag::VideoTimeLineDrag (Editor* e, ArdourCanvas::Item* i)
@@ -2784,7 +2744,7 @@ VideoTimeLineDrag::VideoTimeLineDrag (Editor* e, ArdourCanvas::Item* i)
 	RegionSelection rs;
 	TrackViewList empty;
 	empty.clear();
-	_editor->get_regions_after(rs, (samplepos_t) 0, empty);
+	_editor->get_regions_after(rs, timepos_t::zero (Temporal::AudioTime), empty);
 	std::list<RegionView*> views = rs.by_layer();
 
 	_stuck = false;
@@ -2853,7 +2813,7 @@ VideoTimeLineDrag::motion (GdkEvent* event, bool first_move)
 		return;
 	}
 
-	samplecnt_t dt = adjusted_current_sample (event) - raw_grab_sample() + _pointer_sample_offset;
+	samplecnt_t dt = adjusted_current_time (event).samples() - raw_grab_time().samples() + _pointer_offset.samples();
 	dt = ARDOUR_UI::instance()->video_timeline->quantify_samples_to_apv(_startdrag_video_offset+dt) - _startdrag_video_offset;
 
 	if (_max_backwards_drag >= 0 && dt <= - _max_backwards_drag) {
@@ -2871,7 +2831,7 @@ VideoTimeLineDrag::motion (GdkEvent* event, bool first_move)
 			rv->region()->clear_changes ();
 			rv->region()->suspend_property_changes();
 		}
-		rv->region()->set_position(i->initial_position + dt);
+		rv->region()->set_position(timepos_t (i->initial_position + dt));
 		rv->region_changed(ARDOUR::Properties::position);
 	}
 
@@ -2923,9 +2883,9 @@ VideoTimeLineDrag::finished (GdkEvent * /*event*/, bool movement_occurred)
 	}
 
 	_editor->session()->maybe_update_session_range(
-			std::max(ARDOUR_UI::instance()->video_timeline->get_offset(), (ARDOUR::sampleoffset_t) 0),
-			std::max(ARDOUR_UI::instance()->video_timeline->get_offset() + ARDOUR_UI::instance()->video_timeline->get_duration(), (ARDOUR::sampleoffset_t) 0)
-			);
+		timepos_t (std::max(ARDOUR_UI::instance()->video_timeline->get_offset(), (sampleoffset_t) 0)),
+		timepos_t (std::max(ARDOUR_UI::instance()->video_timeline->get_offset() + ARDOUR_UI::instance()->video_timeline->get_duration(), (sampleoffset_t) 0))
+		);
 
 
 	_editor->commit_reversible_command ();
@@ -2942,7 +2902,7 @@ VideoTimeLineDrag::aborted (bool)
 
 	for (list<AVDraggingView>::iterator i = _views.begin(); i != _views.end(); ++i) {
 		i->view->region()->resume_property_changes ();
-		i->view->region()->set_position(i->initial_position);
+		i->view->region()->set_position(timepos_t (i->initial_position));
 	}
 }
 
@@ -2958,12 +2918,12 @@ TrimDrag::TrimDrag (Editor* e, ArdourCanvas::Item* i, RegionView* p, list<Region
 void
 TrimDrag::start_grab (GdkEvent* event, Gdk::Cursor*)
 {
-	samplepos_t const region_start = _primary->region()->position();
-	samplepos_t const region_end = _primary->region()->last_sample();
-	samplecnt_t const region_length = _primary->region()->length();
+	timepos_t const region_start = _primary->region()->nt_position();
+	timepos_t const region_end = _primary->region()->nt_end();
+	timecnt_t const region_length = _primary->region()->nt_length();
 
-	samplepos_t const pf = adjusted_current_sample (event);
-	setup_snap_delta (MusicSample(region_start, 0));
+	timepos_t const pf = adjusted_current_time (event);
+	setup_snap_delta (region_start);
 
 	if (Keyboard::modifier_state_equals (event->button.state, ArdourKeyboard::trim_contents_modifier ())) {
 		/* Move the contents of the region around without changing the region bounds */
@@ -3004,7 +2964,7 @@ TrimDrag::start_grab (GdkEvent* event, Gdk::Cursor*)
 		show_verbose_cursor_duration (region_start, region_end);
 		break;
 	case ContentsTrim:
-		show_verbose_cursor_time (_primary->region()->start ());
+		show_verbose_cursor_time (timepos_t (_primary->region()->nt_start ()));
 		break;
 	}
 	show_view_preview (_operation == StartTrim ? region_start : region_end);
@@ -3020,10 +2980,9 @@ TrimDrag::motion (GdkEvent* event, bool first_move)
 	RegionView* rv = _primary;
 
 	pair<set<boost::shared_ptr<Playlist> >::iterator,bool> insert_result;
-	sampleoffset_t sample_delta = 0;
-
-	MusicSample adj_sample = adjusted_sample (_drags->current_pointer_sample () + snap_delta (event->button.state), event, true);
-	samplecnt_t dt = adj_sample.sample - raw_grab_sample () + _pointer_sample_offset - snap_delta (event->button.state);
+	timecnt_t delta;
+	timepos_t adj_time = adjusted_time (_drags->current_pointer_time () + snap_delta (event->button.state), event, true);
+	timecnt_t dt = adj_time.distance (raw_grab_time ()) + _pointer_offset - snap_delta (event->button.state);
 
 	if (first_move) {
 
@@ -3096,6 +3055,11 @@ TrimDrag::motion (GdkEvent* event, bool first_move)
 
 	/* contstrain trim to fade length */
 	if (_preserve_fade_anchor) {
+
+		/* fades are audio and always use AudioTime domain */
+
+		samplecnt_t dts = dt.samples();
+
 		switch (_operation) {
 			case StartTrim:
 				for (list<DraggingView>::const_iterator i = _views.begin(); i != _views.end(); ++i) {
@@ -3103,8 +3067,8 @@ TrimDrag::motion (GdkEvent* event, bool first_move)
 					if (!arv) continue;
 					boost::shared_ptr<AudioRegion> ar (arv->audio_region());
 					if (ar->locked()) continue;
-					samplecnt_t len = ar->fade_in()->back()->when;
-					if (len < dt) dt = min(dt, len);
+					samplecnt_t len = ar->fade_in()->back()->when.samples();
+					if (len < dts) dts = min(dts, len);
 				}
 				break;
 			case EndTrim:
@@ -3113,8 +3077,8 @@ TrimDrag::motion (GdkEvent* event, bool first_move)
 					if (!arv) continue;
 					boost::shared_ptr<AudioRegion> ar (arv->audio_region());
 					if (ar->locked()) continue;
-					samplecnt_t len = ar->fade_out()->back()->when;
-					if (len < -dt) dt = max(dt, -len);
+					samplecnt_t len = ar->fade_out()->back()->when.samples();
+					if (len < -dts) dts = max(dts, -len);
 				}
 				break;
 			case ContentsTrim:
@@ -3125,17 +3089,17 @@ TrimDrag::motion (GdkEvent* event, bool first_move)
 	switch (_operation) {
 	case StartTrim:
 		for (list<DraggingView>::iterator i = _views.begin(); i != _views.end(); ++i) {
-			bool changed = i->view->trim_front (i->initial_position + dt, non_overlap_trim
-							    , adj_sample.division);
+			bool changed = i->view->trim_front (timepos_t (i->initial_position) + dt, non_overlap_trim);
+
 
 			if (changed && _preserve_fade_anchor) {
 				AudioRegionView* arv = dynamic_cast<AudioRegionView*> (i->view);
 				if (arv) {
 					boost::shared_ptr<AudioRegion> ar (arv->audio_region());
-					samplecnt_t len = ar->fade_in()->back()->when;
-					samplecnt_t diff = ar->first_sample() - i->initial_position;
+					samplecnt_t len = ar->fade_in()->back()->when.samples();
+					samplecnt_t diff = ar->first_sample() - i->initial_position.samples();
 					samplepos_t new_length = len - diff;
-					i->anchored_fade_length = min (ar->length(), new_length);
+					i->anchored_fade_length = min (ar->length_samples(), new_length);
 					//i->anchored_fade_length = ar->verify_xfade_bounds (new_length, true  /*START*/ );
 					arv->reset_fade_in_shape_width (ar, i->anchored_fade_length, true);
 				}
@@ -3145,15 +3109,16 @@ TrimDrag::motion (GdkEvent* event, bool first_move)
 
 	case EndTrim:
 		for (list<DraggingView>::iterator i = _views.begin(); i != _views.end(); ++i) {
-			bool changed = i->view->trim_end (i->initial_end + dt, non_overlap_trim, adj_sample.division);
+			bool changed = i->view->trim_end (timepos_t (i->initial_end) + dt, non_overlap_trim);
+
 			if (changed && _preserve_fade_anchor) {
 				AudioRegionView* arv = dynamic_cast<AudioRegionView*> (i->view);
 				if (arv) {
 					boost::shared_ptr<AudioRegion> ar (arv->audio_region());
-					samplecnt_t len = ar->fade_out()->back()->when;
-					samplecnt_t diff = 1 + ar->last_sample() - i->initial_end;
+					samplecnt_t len = ar->fade_out()->back()->when.samples();
+					samplecnt_t diff = 1 + ar->last_sample() - i->initial_end.samples();
 					samplepos_t new_length = len + diff;
-					i->anchored_fade_length = min (ar->length(), new_length);
+					i->anchored_fade_length = min (ar->length_samples(), new_length);
 					//i->anchored_fade_length = ar->verify_xfade_bounds (new_length, false  /*END*/ );
 					arv->reset_fade_out_shape_width (ar, i->anchored_fade_length, true);
 				}
@@ -3163,10 +3128,10 @@ TrimDrag::motion (GdkEvent* event, bool first_move)
 
 	case ContentsTrim:
 		{
-			sample_delta = (last_pointer_sample() - adjusted_current_sample(event, false));
+			delta = adjusted_current_time (event).distance (last_pointer_time());
 
 			for (list<DraggingView>::const_iterator i = _views.begin(); i != _views.end(); ++i) {
-				i->view->move_contents (sample_delta);
+				i->view->move_contents (delta);
 			}
 		}
 		break;
@@ -3174,16 +3139,16 @@ TrimDrag::motion (GdkEvent* event, bool first_move)
 
 	switch (_operation) {
 	case StartTrim:
-		show_verbose_cursor_time (rv->region()->position());
+		show_verbose_cursor_time (rv->region()->nt_position());
 		break;
 	case EndTrim:
-		show_verbose_cursor_duration (rv->region()->position(), rv->region()->last_sample());
+		show_verbose_cursor_duration (rv->region()->nt_position(), rv->region()->nt_end());
 		break;
 	case ContentsTrim:
-		show_verbose_cursor_time (rv->region()->start ());
+		show_verbose_cursor_time (timepos_t (rv->region()->nt_start ()));
 		break;
 	}
-	show_view_preview ((_operation == StartTrim ? rv->region()->position() : rv->region()->last_sample()));
+	show_view_preview ((_operation == StartTrim ? rv->region()->nt_position() : rv->region()->nt_end()));
 }
 
 void
@@ -3211,7 +3176,7 @@ TrimDrag::finished (GdkEvent* event, bool movement_occurred)
 					}
 				}
 				if (_jump_position_when_done) {
-					i->view->region()->set_position (i->initial_position);
+					i->view->region()->set_position (timepos_t (i->initial_position));
 				}
 			}
 		} else if (_operation == EndTrim) {
@@ -3226,7 +3191,7 @@ TrimDrag::finished (GdkEvent* event, bool movement_occurred)
 					}
 				}
 				if (_jump_position_when_done) {
-					i->view->region()->set_position (i->initial_end - i->view->region()->length());
+					i->view->region()->set_position (timepos_t (i->initial_end).earlier (i->view->region()->nt_length()));
 				}
 			}
 		}
@@ -3258,8 +3223,8 @@ TrimDrag::finished (GdkEvent* event, bool movement_occurred)
 
 	} else {
 		/* no mouse movement */
-		if (adjusted_current_sample (event) != adjusted_sample (_drags->current_pointer_sample(), event, false).sample) {
-			_editor->point_trim (event, adjusted_current_sample (event));
+		if (adjusted_current_time (event) != adjusted_time (_drags->current_pointer_time(), event, false)) {
+			_editor->point_trim (event, adjusted_current_time (event));
 		}
 	}
 
@@ -3290,7 +3255,7 @@ TrimDrag::aborted (bool movement_occurred)
 }
 
 void
-TrimDrag::setup_pointer_sample_offset ()
+TrimDrag::setup_pointer_offset ()
 {
 	list<DraggingView>::iterator i = _views.begin ();
 	while (i != _views.end() && i->view != _primary) {
@@ -3303,13 +3268,13 @@ TrimDrag::setup_pointer_sample_offset ()
 
 	switch (_operation) {
 	case StartTrim:
-		_pointer_sample_offset = raw_grab_sample() - i->initial_position;
+		_pointer_offset = i->initial_position.distance (raw_grab_time());
 		break;
 	case EndTrim:
-		_pointer_sample_offset = raw_grab_sample() - i->initial_end;
+		_pointer_offset = i->initial_end.distance (raw_grab_time());
 		break;
 	case ContentsTrim:
-		_pointer_sample_offset = 0;
+		_pointer_offset = 0;
 		break;
 	}
 }
@@ -3332,18 +3297,22 @@ void
 MeterMarkerDrag::start_grab (GdkEvent* event, Gdk::Cursor* cursor)
 {
 	Drag::start_grab (event, cursor);
-	show_verbose_cursor_time (adjusted_current_sample(event));
+	show_verbose_cursor_time (adjusted_current_time (event));
 }
 
 void
-MeterMarkerDrag::setup_pointer_sample_offset ()
+MeterMarkerDrag::setup_pointer_offset ()
 {
-	_pointer_sample_offset = raw_grab_sample() - _marker->meter().sample();
+#warning NUTEMPO fixme needs new tempo map API to get "time()" for meter
+	// _pointer_offset = raw_grab_time() - _marker->meter().time();
 }
 
 void
 MeterMarkerDrag::motion (GdkEvent* event, bool first_move)
 {
+#warning NUTEMPO fixme needs new tempo map
+#if 0
+
 	if (first_move) {
 		// create a dummy marker to catch events, then hide it.
 
@@ -3365,7 +3334,6 @@ MeterMarkerDrag::motion (GdkEvent* event, bool first_move)
 		TempoMap& map (_editor->session()->tempo_map());
 		/* get current state */
 		before_state = &map.get_state();
-
 		if (!_copy) {
 			_editor->begin_reversible_command (_("move meter mark"));
 		} else {
@@ -3374,30 +3342,29 @@ MeterMarkerDrag::motion (GdkEvent* event, bool first_move)
 			Temporal::BBT_Time bbt = _real_section->bbt();
 
 			/* we can't add a meter where one currently exists */
-			if (_real_section->sample() < adjusted_current_sample (event, false)) {
+			if (_real_section->time() < adjusted_current_time (event, false)) {
 				++bbt.bars;
 			} else {
 				--bbt.bars;
 			}
 			const samplepos_t sample = map.sample_at_bbt (bbt);
 			_real_section = map.add_meter (Meter (_marker->meter().divisions_per_bar(), _marker->meter().note_divisor())
-						       , bbt, sample, _real_section->position_lock_style());
+						       , bbt, sample, _real_section->position_time_domain());
 			if (!_real_section) {
 				aborted (true);
 				return;
 			}
-
-		}
+1		}
 		/* only snap to bars. leave snap mode alone for audio locked meters.*/
-		if (_real_section->position_lock_style() != AudioTime) {
+		if (_real_section->position_time_domain() != AudioTime) {
 			_editor->set_grid_to (GridTypeBar);
 			_editor->set_snap_mode (SnapMagnetic);
 		}
 	}
 
-	samplepos_t pf = adjusted_current_sample (event);
+	timepos_t pf = adjusted_current_time (event);
 
-	if (_real_section->position_lock_style() == AudioTime && _editor->grid_musical()) {
+	if (_real_section->position_time_domain() == Temporal::AudioTime && _editor->grid_musical()) {
 		/* never snap to music for audio locked */
 		pf = adjusted_current_sample (event, false);
 	}
@@ -3405,10 +3372,11 @@ MeterMarkerDrag::motion (GdkEvent* event, bool first_move)
 	_editor->session()->tempo_map().gui_set_meter_position (_real_section, pf);
 
 	/* fake marker meeds to stay under the mouse, unlike the real one. */
-	_marker->set_position (adjusted_current_sample (event, false));
+	_marker->set_position (adjusted_current_time (event, false));
 
-	show_verbose_cursor_time (_real_section->sample());
+	show_verbose_cursor_time (_real_section->time());
 	_editor->set_snapped_cursor_position(_real_section->sample());
+#endif
 }
 
 void
@@ -3425,11 +3393,14 @@ MeterMarkerDrag::finished (GdkEvent* event, bool movement_occurred)
 	_editor->set_grid_to (_old_grid_type);
 	_editor->set_snap_mode (_old_snap_mode);
 
+#warning NUTEMPO fixme needs new tempo map
+#if 0
 	TempoMap& map (_editor->session()->tempo_map());
 
 	XMLNode &after = map.get_state();
 	_editor->session()->add_command(new MementoCommand<TempoMap>(map, before_state, &after));
 	_editor->commit_reversible_command ();
+#endif
 
 	// delete the dummy marker we used for visual representation while moving.
 	// a new visual marker will show up automatically.
@@ -3439,6 +3410,8 @@ MeterMarkerDrag::finished (GdkEvent* event, bool movement_occurred)
 void
 MeterMarkerDrag::aborted (bool moved)
 {
+#warning NUTEMPO fixme needs new tempo map
+#if 0
 	_marker->set_position (_marker->meter().sample ());
 	if (moved) {
 		/* reinstate old snap setting */
@@ -3450,6 +3423,7 @@ MeterMarkerDrag::aborted (bool moved)
 		// a new visual marker will show up automatically.
 		delete _marker;
 	}
+#endif
 }
 
 TempoMarkerDrag::TempoMarkerDrag (Editor* e, ArdourCanvas::Item* i, bool c)
@@ -3461,12 +3435,15 @@ TempoMarkerDrag::TempoMarkerDrag (Editor* e, ArdourCanvas::Item* i, bool c)
 {
 	DEBUG_TRACE (DEBUG::Drags, "New TempoMarkerDrag\n");
 
+#warning NUTEMPO fixme needs new tempo map
+#if 0
 	_marker = reinterpret_cast<TempoMarker*> (_item->get_data ("marker"));
 	_real_section = &_marker->tempo();
 	_movable = !_real_section->initial();
 	_grab_bpm = Tempo (_real_section->note_types_per_minute(), _real_section->note_type(), _real_section->end_note_types_per_minute());
 	_grab_qn = _real_section->pulse() * 4.0;
 	assert (_marker);
+#endif
 }
 
 void
@@ -3476,14 +3453,17 @@ TempoMarkerDrag::start_grab (GdkEvent* event, Gdk::Cursor* cursor)
 	if (!_real_section->active()) {
 		show_verbose_cursor_text (_("inactive"));
 	} else {
-		show_verbose_cursor_time (adjusted_current_sample (event));
+		show_verbose_cursor_time (adjusted_current_time (event));
 	}
 }
 
 void
-TempoMarkerDrag::setup_pointer_sample_offset ()
+TempoMarkerDrag::setup_pointer_offset ()
 {
-	_pointer_sample_offset = raw_grab_sample() - _real_section->sample();
+#warning NUTEMPO fixme needs new tempo map
+#if 0
+	_pointer_offset = raw_grab_time() - _real_section->time();
+#endif
 }
 
 void
@@ -3492,6 +3472,9 @@ TempoMarkerDrag::motion (GdkEvent* event, bool first_move)
 	if (!_real_section->active()) {
 		return;
 	}
+#warning NUTEMPO fixme needs new tempo map
+#if 0
+
 	TempoMap& map (_editor->session()->tempo_map());
 
 	if (first_move) {
@@ -3527,9 +3510,9 @@ TempoMarkerDrag::motion (GdkEvent* event, bool first_move)
 
 			_editor->begin_reversible_command (_("copy tempo mark"));
 
-			if (_real_section->position_lock_style() == MusicTime) {
+			if (_real_section->position_time_domain() == BeatTime) {
 				const int32_t divisions = _editor->get_grid_music_divisions (event->button.state);
-				_real_section = map.add_tempo (tempo, map.exact_qn_at_sample (sample, divisions), 0, MusicTime);
+				_real_section = map.add_tempo (tempo, map.exact_qn_at_sample (sample, divisions), 0, BeatTime);
 			} else {
 				_real_section = map.add_tempo (tempo, 0.0, sample, AudioTime);
 			}
@@ -3541,6 +3524,7 @@ TempoMarkerDrag::motion (GdkEvent* event, bool first_move)
 		}
 
 	}
+
 	if (ArdourKeyboard::indicates_constraint (event->button.state) && ArdourKeyboard::indicates_copy (event->button.state)) {
 		double new_bpm = max (1.5, _grab_bpm.end_note_types_per_minute() + ((grab_y() - min (-1.0, current_pointer_y())) / 5.0));
 		stringstream strs;
@@ -3576,12 +3560,16 @@ TempoMarkerDrag::motion (GdkEvent* event, bool first_move)
 		show_verbose_cursor_time (_real_section->sample());
 		_editor->set_snapped_cursor_position(_real_section->sample());
 	}
+
 	_marker->set_position (adjusted_current_sample (event, false));
+#endif
 }
 
 void
 TempoMarkerDrag::finished (GdkEvent* event, bool movement_occurred)
 {
+#warning NUTEMPO fixme needs new tempo map
+#if 0
 	if (!_real_section->active()) {
 		return;
 	}
@@ -3597,7 +3585,7 @@ TempoMarkerDrag::finished (GdkEvent* event, bool movement_occurred)
 	XMLNode &after = map.get_state();
 	_editor->session()->add_command (new MementoCommand<TempoMap>(map, _before_state, &after));
 	_editor->commit_reversible_command ();
-
+#endif
 	// delete the dummy marker we used for visual representation while moving.
 	// a new visual marker will show up automatically.
 	delete _marker;
@@ -3606,6 +3594,8 @@ TempoMarkerDrag::finished (GdkEvent* event, bool movement_occurred)
 void
 TempoMarkerDrag::aborted (bool moved)
 {
+#warning NUTEMPO fixme needs new tempo map
+#if 0
 	_marker->set_position (_marker->tempo().sample());
 	if (moved) {
 		TempoMap& map (_editor->session()->tempo_map());
@@ -3613,6 +3603,7 @@ TempoMarkerDrag::aborted (bool moved)
 		// delete the dummy (hidden) marker we used for events while moving.
 		delete _marker;
 	}
+#endif
 }
 
 BBTRulerDrag::BBTRulerDrag (Editor* e, ArdourCanvas::Item* i)
@@ -3630,10 +3621,13 @@ void
 BBTRulerDrag::start_grab (GdkEvent* event, Gdk::Cursor* cursor)
 {
 	Drag::start_grab (event, cursor);
+
+#warning NUTEMPO fixme needs new tempo map
+#if 0
 	TempoMap& map (_editor->session()->tempo_map());
 	_tempo = const_cast<TempoSection*> (&map.tempo_section_at_sample (raw_grab_sample()));
 
-	if (adjusted_current_sample (event, false) <= _tempo->sample()) {
+	if (adjusted_current_time (event, false) <= _tempo->time()) {
 		_drag_valid = false;
 		return;
 	}
@@ -3650,11 +3644,14 @@ BBTRulerDrag::start_grab (GdkEvent* event, Gdk::Cursor* cursor)
 
 	sstr << "start: " << fixed << setprecision(3) << _tempo->note_types_per_minute();
 	show_verbose_cursor_text (sstr.str());
+#endif
 }
 
 void
-BBTRulerDrag::setup_pointer_sample_offset ()
+BBTRulerDrag::setup_pointer_offset ()
 {
+#warning NUTEMPO fixme needs new tempo map
+#if 0
 	TempoMap& map (_editor->session()->tempo_map());
 	/* get current state */
 	_before_state = &map.get_state();
@@ -3675,8 +3672,9 @@ BBTRulerDrag::setup_pointer_sample_offset ()
 
 	_grab_qn = map.quarter_note_at_beat (beat);
 
-	_pointer_sample_offset = raw_grab_sample() - map.sample_at_quarter_note (_grab_qn);
+	_pointer_offset = raw_grab_sample() - map.sample_at_quarter_note (_grab_qn);
 
+#endif
 }
 
 void
@@ -3690,6 +3688,8 @@ BBTRulerDrag::motion (GdkEvent* event, bool first_move)
 		_editor->begin_reversible_command (_("stretch tempo"));
 	}
 
+#warning NUTEMPO fixme needs new tempo map
+#if 0
 	TempoMap& map (_editor->session()->tempo_map());
 	samplepos_t pf;
 
@@ -3714,6 +3714,7 @@ BBTRulerDrag::motion (GdkEvent* event, bool first_move)
 	}
 	sstr << "start: " << fixed << setprecision(3) << _tempo->note_types_per_minute();
 	show_verbose_cursor_text (sstr.str());
+#endif
 }
 
 void
@@ -3723,6 +3724,8 @@ BBTRulerDrag::finished (GdkEvent* event, bool movement_occurred)
 		return;
 	}
 
+#warning NUTEMPO fixme needs new tempo map
+#if 0
 	TempoMap& map (_editor->session()->tempo_map());
 
 	_editor->tempo_curve_selected (_tempo, false);
@@ -3740,16 +3743,23 @@ BBTRulerDrag::finished (GdkEvent* event, bool movement_occurred)
 	XMLNode &after = map.get_state();
 	_editor->session()->add_command(new MementoCommand<TempoMap>(map, _before_state, &after));
 	_editor->commit_reversible_command ();
-
+#endif
 }
 
 void
 BBTRulerDrag::aborted (bool moved)
 {
+#warning NUTEMPO fixme needs new tempo map
+#if 0
 	if (moved) {
 		_editor->session()->tempo_map().set_state (*_before_state, Stateful::current_state_version);
 	}
+#endif
 }
+
+
+#warning NUTEMPO fixme no tempo twist drag for now
+#if 0
 
 TempoTwistDrag::TempoTwistDrag (Editor* e, ArdourCanvas::Item* i)
 	: Drag (e, i)
@@ -3802,7 +3812,7 @@ TempoTwistDrag::start_grab (GdkEvent* event, Gdk::Cursor* cursor)
 }
 
 void
-TempoTwistDrag::setup_pointer_sample_offset ()
+TempoTwistDrag::setup_pointer_offset ()
 {
 	TempoMap& map (_editor->session()->tempo_map());
 	const double beat_at_sample = max (0.0, map.beat_at_sample (raw_grab_sample()));
@@ -3821,7 +3831,7 @@ TempoTwistDrag::setup_pointer_sample_offset ()
 
 	_grab_qn = map.quarter_note_at_beat (beat);
 
-	_pointer_sample_offset = raw_grab_sample() - map.sample_at_quarter_note (_grab_qn);
+	_pointer_offset = raw_grab_sample() - map.sample_at_quarter_note (_grab_qn);
 
 }
 
@@ -3881,10 +3891,10 @@ TempoTwistDrag::aborted (bool moved)
 		_editor->session()->tempo_map().set_state (*_before_state, Stateful::current_state_version);
 	}
 }
+#endif
 
 TempoEndDrag::TempoEndDrag (Editor* e, ArdourCanvas::Item* i)
 	: Drag (e, i)
-	, _grab_qn (0.0)
 	, _tempo (0)
 	, _before_state (0)
 	, _drag_valid (true)
@@ -3899,11 +3909,12 @@ void
 TempoEndDrag::start_grab (GdkEvent* event, Gdk::Cursor* cursor)
 {
 	Drag::start_grab (event, cursor);
+#warning NUTEMPO fixme needs new tmepo map
+#if 0
 	TempoMap& tmap (_editor->session()->tempo_map());
 
 	/* get current state */
 	_before_state = &tmap.get_state();
-
 	if (_tempo->locked_to_meter()) {
 		_drag_valid = false;
 		return;
@@ -3923,15 +3934,14 @@ TempoEndDrag::start_grab (GdkEvent* event, Gdk::Cursor* cursor)
 	}
 
 	show_verbose_cursor_text (sstr.str());
+#endif
 }
 
 void
-TempoEndDrag::setup_pointer_sample_offset ()
+TempoEndDrag::setup_pointer_offset ()
 {
-	TempoMap& map (_editor->session()->tempo_map());
-
-	_pointer_sample_offset = raw_grab_sample() - map.sample_at_quarter_note (_grab_qn);
-
+#warning NUTEMPO grab_qn should be timepos_t
+	// _pointer_offset = _grab_qn.distance (raw_grab_time());
 }
 
 void
@@ -3941,6 +3951,8 @@ TempoEndDrag::motion (GdkEvent* event, bool first_move)
 		return;
 	}
 
+#warning NUTEMPO fixme needs new tempo map
+#if 0
 	TempoMap& map (_editor->session()->tempo_map());
 
 	if (first_move) {
@@ -3958,6 +3970,7 @@ TempoEndDrag::motion (GdkEvent* event, bool first_move)
 	}
 
 	show_verbose_cursor_text (sstr.str());
+#endif
 }
 
 void
@@ -3967,6 +3980,8 @@ TempoEndDrag::finished (GdkEvent* event, bool movement_occurred)
 		return;
 	}
 
+#warning NUTEMPO fixme needs new tempo map
+#if 0
 	TempoMap& tmap (_editor->session()->tempo_map());
 
 	XMLNode &after = tmap.get_state();
@@ -3982,14 +3997,18 @@ TempoEndDrag::finished (GdkEvent* event, bool movement_occurred)
 		_editor->tempo_curve_selected (_tempo, false);
 
 	}
+#endif
 }
 
 void
 TempoEndDrag::aborted (bool moved)
 {
+#warning NUTEMPO fixme needs new tempo map
+#if 0
 	if (moved) {
 		_editor->session()->tempo_map().set_state (*_before_state, Stateful::current_state_version);
 	}
+#endif
 }
 
 CursorDrag::CursorDrag (Editor* e, EditorCursor& c, bool s)
@@ -4027,7 +4046,7 @@ CursorDrag::fake_locate (samplepos_t t)
 		s->queue_song_position_pointer ();
 	}
 
-	show_verbose_cursor_time (t);
+	show_verbose_cursor_time (timepos_t (t));
 	_editor->UpdateAllTransportClocks (t);
 }
 
@@ -4036,16 +4055,16 @@ CursorDrag::start_grab (GdkEvent* event, Gdk::Cursor* c)
 {
 	Drag::start_grab (event, c);
 
-	setup_snap_delta (MusicSample (_editor->playhead_cursor ()->current_sample(), 0));
+	setup_snap_delta (timepos_t (_editor->playhead_cursor->current_sample()));
 
 	_grab_zoom = _editor->samples_per_pixel;
 
-	MusicSample where (_editor->canvas_event_sample (event) + snap_delta (event->button.state), 0);
+	timepos_t where (timepos_t (_editor->canvas_event_sample (event)) + snap_delta (event->button.state));
 
 	_editor->snap_to_with_modifier (where, event);
 
 	_editor->_dragging_playhead = true;
-	_editor->_control_scroll_target = where.sample;
+	_editor->_control_scroll_target = where.samples();
 
 	Session* s = _editor->session ();
 
@@ -4079,7 +4098,7 @@ CursorDrag::start_grab (GdkEvent* event, Gdk::Cursor* c)
 		}
 	}
 
-	fake_locate (where.sample - snap_delta (event->button.state));
+	fake_locate (where.earlier (snap_delta (event->button.state)).samples());
 
 	_last_y_delta = 0;
 }
@@ -4087,12 +4106,12 @@ CursorDrag::start_grab (GdkEvent* event, Gdk::Cursor* c)
 void
 CursorDrag::motion (GdkEvent* event, bool)
 {
-	MusicSample where (_editor->canvas_event_sample (event) + snap_delta (event->button.state), 0);
+	timepos_t where (timepos_t (_editor->canvas_event_sample (event)) + snap_delta (event->button.state));
 
 	_editor->snap_to_with_modifier (where, event);
 
-	if (where.sample != last_pointer_sample()) {
-		fake_locate (where.sample - snap_delta (event->button.state));
+	if (where != last_pointer_time()) {
+		fake_locate (where.earlier (snap_delta (event->button.state)).samples());;
 	}
 
 	//maybe do zooming, too, if the option is enabled
@@ -4160,7 +4179,7 @@ CursorDrag::aborted (bool)
 		_editor->_dragging_playhead = false;
 	}
 
-	_editor->playhead_cursor ()->set_position (adjusted_sample (grab_sample (), 0, false).sample);
+	_editor->playhead_cursor->set_position (adjusted_time (grab_time (), 0, false).samples());
 }
 
 FadeInDrag::FadeInDrag (Editor* e, ArdourCanvas::Item* i, RegionView* p, list<RegionView*> const & v)
@@ -4176,38 +4195,40 @@ FadeInDrag::start_grab (GdkEvent* event, Gdk::Cursor* cursor)
 
 	AudioRegionView* arv = dynamic_cast<AudioRegionView*> (_primary);
 	boost::shared_ptr<AudioRegion> const r = arv->audio_region ();
-	setup_snap_delta (MusicSample (r->position(), 0));
+	setup_snap_delta (r->nt_position());
 
-	show_verbose_cursor_duration (r->position(), r->position() + r->fade_in()->back()->when, 32);
-	show_view_preview (r->position() + r->fade_in()->back()->when);
+	show_verbose_cursor_duration (r->nt_position(), r->nt_position() + r->fade_in()->back()->when, 32);
+	show_view_preview (r->nt_position() + r->fade_in()->back()->when);
 }
 
 void
-FadeInDrag::setup_pointer_sample_offset ()
+FadeInDrag::setup_pointer_offset ()
 {
 	AudioRegionView* arv = dynamic_cast<AudioRegionView*> (_primary);
 	boost::shared_ptr<AudioRegion> const r = arv->audio_region ();
-	_pointer_sample_offset = raw_grab_sample() - ((samplecnt_t) r->fade_in()->back()->when + r->position());
+	_pointer_offset = (r->fade_in()->back()->when + r->nt_position()).distance (raw_grab_time());
 }
 
 void
 FadeInDrag::motion (GdkEvent* event, bool)
 {
-	samplecnt_t fade_length;
 
-	MusicSample pos (_editor->canvas_event_sample (event) + snap_delta (event->button.state), 0);
-	_editor->snap_to_with_modifier (pos, event);
+	timepos_t tpos (timepos_t (_editor->canvas_event_sample (event)) + snap_delta (event->button.state));
+	_editor->snap_to_with_modifier (tpos, event);
+	tpos.shift_earlier (snap_delta (event->button.state));
 
-	pos.sample -= snap_delta (event->button.state);
+	samplepos_t pos = tpos.samples ();
 
 	boost::shared_ptr<AudioRegion> region = boost::dynamic_pointer_cast<AudioRegion> (_primary->region ());
 
-	if (pos.sample < (region->position() + 64)) {
+	samplecnt_t fade_length;
+
+	if (pos < (region->position_sample() + 64)) {
 		fade_length = 64; // this should be a minimum defined somewhere
-	} else if (pos.sample > region->position() + region->length() - region->fade_out()->back()->when) {
-		fade_length = region->length() - region->fade_out()->back()->when - 1;
+	} else if (pos > region->position_sample() + region->length_samples() - region->fade_out()->back()->when.samples()) {
+		fade_length = region->length_samples() - region->fade_out()->back()->when.samples() - 1;
 	} else {
-		fade_length = pos.sample - region->position();
+		fade_length = pos - region->position_sample();
 	}
 
 	for (list<DraggingView>::iterator i = _views.begin(); i != _views.end(); ++i) {
@@ -4221,8 +4242,8 @@ FadeInDrag::motion (GdkEvent* event, bool)
 		tmp->reset_fade_in_shape_width (tmp->audio_region(), fade_length);
 	}
 
-	show_verbose_cursor_duration (region->position(), region->position() + fade_length, 32);
-	show_view_preview (region->position() + fade_length);
+	show_verbose_cursor_duration (region->nt_position(), region->nt_position() + timepos_t (fade_length), 32);
+	show_view_preview (region->nt_position() + timepos_t (fade_length));
 }
 
 void
@@ -4232,20 +4253,21 @@ FadeInDrag::finished (GdkEvent* event, bool movement_occurred)
 		return;
 	}
 
-	samplecnt_t fade_length;
-	MusicSample pos (_editor->canvas_event_sample (event) + snap_delta (event->button.state), 0);
+	timepos_t tpos (timepos_t (_editor->canvas_event_sample (event)) + snap_delta (event->button.state));
+	_editor->snap_to_with_modifier (tpos, event);
+	tpos.shift_earlier (snap_delta (event->button.state));
 
-	_editor->snap_to_with_modifier (pos, event);
-	pos.sample -= snap_delta (event->button.state);
+	samplepos_t pos = tpos.samples ();
+	samplecnt_t fade_length;
 
 	boost::shared_ptr<AudioRegion> region = boost::dynamic_pointer_cast<AudioRegion> (_primary->region ());
 
-	if (pos.sample < (region->position() + 64)) {
+	if (pos < (region->position_sample() + 64)) {
 		fade_length = 64; // this should be a minimum defined somewhere
-	} else if (pos.sample >= region->position() + region->length() - region->fade_out()->back()->when) {
-		fade_length = region->length() - region->fade_out()->back()->when - 1;
+	} else if (pos >= region->position_sample() + region->length_samples() - region->fade_out()->back()->when.samples()) {
+		fade_length = region->length_samples() - region->fade_out()->back()->when.samples() - 1;
 	} else {
-		fade_length = pos.sample - region->position();
+		fade_length = pos - region->position_sample();
 	}
 
 	bool in_command = false;
@@ -4287,7 +4309,7 @@ FadeInDrag::aborted (bool)
 			continue;
 		}
 
-		tmp->reset_fade_in_shape_width (tmp->audio_region(), tmp->audio_region()->fade_in()->back()->when);
+		tmp->reset_fade_in_shape_width (tmp->audio_region(), tmp->audio_region()->fade_in()->back()->when.samples());
 	}
 }
 
@@ -4304,37 +4326,39 @@ FadeOutDrag::start_grab (GdkEvent* event, Gdk::Cursor* cursor)
 
 	AudioRegionView* arv = dynamic_cast<AudioRegionView*> (_primary);
 	boost::shared_ptr<AudioRegion> r = arv->audio_region ();
-	setup_snap_delta (MusicSample (r->last_sample(), 0));
+	setup_snap_delta (r->nt_last());
 
-	show_verbose_cursor_duration (r->last_sample() - r->fade_out()->back()->when, r->last_sample());
+	show_verbose_cursor_duration (r->nt_last().earlier (r->fade_out()->back()->when), r->nt_last());
 	show_view_preview (r->fade_out()->back()->when);
 }
 
 void
-FadeOutDrag::setup_pointer_sample_offset ()
+FadeOutDrag::setup_pointer_offset ()
 {
 	AudioRegionView* arv = dynamic_cast<AudioRegionView*> (_primary);
 	boost::shared_ptr<AudioRegion> r = arv->audio_region ();
-	_pointer_sample_offset = raw_grab_sample() - (r->length() - (samplecnt_t) r->fade_out()->back()->when + r->position());
+	_pointer_offset = (r->nt_position() + (r->nt_length() - r->fade_out()->back()->when)).distance (raw_grab_time());
 }
 
 void
 FadeOutDrag::motion (GdkEvent* event, bool)
 {
 	samplecnt_t fade_length;
-	MusicSample pos (_editor->canvas_event_sample (event) + snap_delta (event->button.state), 0);
 
-	_editor->snap_to_with_modifier (pos, event);
-	pos.sample -= snap_delta (event->button.state);
+	timepos_t tpos (timepos_t (_editor->canvas_event_sample (event)) + snap_delta (event->button.state));
+	_editor->snap_to_with_modifier (tpos, event);
+	tpos.shift_earlier (snap_delta (event->button.state));
+
+	samplepos_t pos (tpos.samples());
 
 	boost::shared_ptr<AudioRegion> region = boost::dynamic_pointer_cast<AudioRegion> (_primary->region ());
 
-	if (pos.sample > (region->last_sample() - 64)) {
+	if (pos > (region->last_sample() - 64)) {
 		fade_length = 64; // this should really be a minimum fade defined somewhere
-	} else if (pos.sample <= region->position() + region->fade_in()->back()->when) {
-		fade_length = region->length() - region->fade_in()->back()->when - 1;
+	} else if (pos <= region->position_sample() + region->fade_in()->back()->when.samples()) {
+		fade_length = region->length_samples() - region->fade_in()->back()->when.samples() - 1;
 	} else {
-		fade_length = region->last_sample() - pos.sample;
+		fade_length = region->last_sample() - pos;
 	}
 
 	for (list<DraggingView>::iterator i = _views.begin(); i != _views.end(); ++i) {
@@ -4348,8 +4372,9 @@ FadeOutDrag::motion (GdkEvent* event, bool)
 		tmp->reset_fade_out_shape_width (tmp->audio_region(), fade_length);
 	}
 
-	show_verbose_cursor_duration (region->last_sample() - fade_length, region->last_sample());
-	show_view_preview (region->last_sample() - fade_length);
+#warning NUTEMPO the mix of timepos_t and duration does not seem correct
+	show_verbose_cursor_duration (timepos_t (region->last_sample() - fade_length), region->nt_last());
+	show_view_preview (timepos_t (region->last_sample() - fade_length));
 }
 
 void
@@ -4359,20 +4384,22 @@ FadeOutDrag::finished (GdkEvent* event, bool movement_occurred)
 		return;
 	}
 
-	samplecnt_t fade_length;
-	MusicSample pos (_editor->canvas_event_sample (event) + snap_delta (event->button.state), 0);
+	timepos_t tpos (timepos_t (_editor->canvas_event_sample (event)) + snap_delta (event->button.state));
+	_editor->snap_to_with_modifier (tpos, event);
+	tpos.shift_earlier (snap_delta (event->button.state));
 
-	_editor->snap_to_with_modifier (pos, event);
-	pos.sample -= snap_delta (event->button.state);
+	samplepos_t pos (tpos.samples());
+
+	samplecnt_t fade_length;
 
 	boost::shared_ptr<AudioRegion> region = boost::dynamic_pointer_cast<AudioRegion> (_primary->region ());
 
-	if (pos.sample > (region->last_sample() - 64)) {
+	if (pos > (region->last_sample() - 64)) {
 		fade_length = 64; // this should really be a minimum fade defined somewhere
-	} else if (pos.sample <= region->position() + region->fade_in()->back()->when) {
-		fade_length = region->length() - region->fade_in()->back()->when - 1;
+	} else if (pos <= region->position_sample() + region->fade_in()->back()->when.samples()) {
+		fade_length = region->length_samples() - region->fade_in()->back()->when.samples() - 1;
 	} else {
-		fade_length = region->last_sample() - pos.sample;
+		fade_length = region->last_sample() - pos;
 	}
 
 	bool in_command = false;
@@ -4414,7 +4441,7 @@ FadeOutDrag::aborted (bool)
 			continue;
 		}
 
-		tmp->reset_fade_out_shape_width (tmp->audio_region(), tmp->audio_region()->fade_out()->back()->when);
+		tmp->reset_fade_out_shape_width (tmp->audio_region(), tmp->audio_region()->fade_out()->back()->when.samples());
 	}
 }
 
@@ -4466,8 +4493,8 @@ MarkerDrag::start_grab (GdkEvent* event, Gdk::Cursor* cursor)
 	} else {
 		show_verbose_cursor_time (location->end());
 	}
-	show_view_preview ((is_start ? location->start() : location->end()) + _video_sample_offset);
-	setup_snap_delta (MusicSample (is_start ? location->start() : location->end(), 0));
+	show_view_preview ((is_start ? location->start() : location->end()) + _video_offset);
+	setup_snap_delta (timepos_t (is_start ? location->start() : location->end()));
 
 	Selection::Operation op = ArdourKeyboard::selection_type (event->button.state);
 
@@ -4485,14 +4512,14 @@ MarkerDrag::start_grab (GdkEvent* event, Gdk::Cursor* cursor)
 	{
 		Locations::LocationList ll;
 		list<ArdourMarker*> to_add;
-		samplepos_t s, e;
+		timepos_t s, e;
 		_editor->selection->markers.range (s, e);
 		s = min (_marker->position(), s);
 		e = max (_marker->position(), e);
 		s = min (s, e);
 		e = max (s, e);
-		if (e < max_samplepos) {
-			++e;
+		if (e < timepos_t::max (e.time_domain())) {
+			e.increment();
 		}
 		_editor->session()->locations()->find_all_between (s, e, ll, Location::Flags (0));
 		for (Locations::LocationList::iterator i = ll.begin(); i != ll.end(); ++i) {
@@ -4554,32 +4581,32 @@ MarkerDrag::start_grab (GdkEvent* event, Gdk::Cursor* cursor)
 }
 
 void
-MarkerDrag::setup_pointer_sample_offset ()
+MarkerDrag::setup_pointer_offset ()
 {
 	bool is_start;
 	Location *location = _editor->find_location_from_marker (_marker, is_start);
-	_pointer_sample_offset = raw_grab_sample() - (is_start ? location->start() : location->end());
+	_pointer_offset = (is_start ? location->start() : location->end()).distance (raw_grab_time());
 }
 
 void
-MarkerDrag::setup_video_sample_offset ()
+MarkerDrag::setup_video_offset ()
 {
-	_video_sample_offset = 0;
+	_video_offset = 0;
 	_preview_video = true;
 }
 
 void
 MarkerDrag::motion (GdkEvent* event, bool)
 {
-	samplecnt_t f_delta = 0;
+	timecnt_t f_delta;
 	bool is_start;
 	bool move_both = false;
 	Location *real_location;
 	Location *copy_location = 0;
-	samplecnt_t const sd = snap_delta (event->button.state);
+	timecnt_t const sd = snap_delta (event->button.state);
 
-	samplecnt_t const newframe = adjusted_sample (_drags->current_pointer_sample () + sd, event, true).sample - sd;
-	samplepos_t next = newframe;
+	timepos_t const newpos = adjusted_time (_drags->current_pointer_time () + sd, event, true).earlier (sd);
+	timepos_t next = newpos;
 
 	if (Keyboard::modifier_state_contains (event->button.state, ArdourKeyboard::push_points_modifier ())) {
 		move_both = true;
@@ -4605,7 +4632,7 @@ MarkerDrag::motion (GdkEvent* event, bool)
 			}
 
 			if (real_location->is_mark()) {
-				f_delta = newframe - copy_location->start();
+				f_delta = copy_location->start().distance (newpos);
 			} else {
 
 
@@ -4614,14 +4641,14 @@ MarkerDrag::motion (GdkEvent* event, bool)
 				case ArdourMarker::RangeStart:
 				case ArdourMarker::LoopStart:
 				case ArdourMarker::PunchIn:
-					f_delta = newframe - copy_location->start();
+					f_delta = copy_location->start().distance (newpos);
 					break;
 
 				case ArdourMarker::SessionEnd:
 				case ArdourMarker::RangeEnd:
 				case ArdourMarker::LoopEnd:
 				case ArdourMarker::PunchOut:
-					f_delta = newframe - copy_location->end();
+					f_delta = copy_location->end().distance (newpos);
 					break;
 				default:
 					/* what kind of marker is this ? */
@@ -4637,8 +4664,6 @@ MarkerDrag::motion (GdkEvent* event, bool)
 		/* hmm, impossible - we didn't find the dragged marker */
 		return;
 	}
-
-	const int32_t divisions = _editor->get_grid_music_divisions (event->button.state);
 
 	/* now move them all */
 
@@ -4657,37 +4682,37 @@ MarkerDrag::motion (GdkEvent* event, bool)
 		if (copy_location->is_mark()) {
 
 			/* now move it */
-			copy_location->set_start (copy_location->start() + f_delta, false, true, divisions);
+			copy_location->set_start (copy_location->start() + f_delta, false);
 
 		} else {
 
-			samplepos_t new_start = copy_location->start() + f_delta;
-			samplepos_t new_end = copy_location->end() + f_delta;
+			timepos_t new_start = copy_location->start() + f_delta;
+			timepos_t new_end = copy_location->end() + f_delta;
 
 			if (is_start) { // start-of-range marker
 
 				if (move_both || (*x).move_both) {
-					copy_location->set_start (new_start, false, true, divisions);
-					copy_location->set_end (new_end, false, true, divisions);
+					copy_location->set_start (new_start, false);
+					copy_location->set_end (new_end, false);
 				} else if (new_start < copy_location->end()) {
-					copy_location->set_start (new_start, false, true, divisions);
-				} else if (newframe > 0) {
+					copy_location->set_start (new_start, false);
+				} else if (newpos.positive()) {
 					//_editor->snap_to (next, RoundUpAlways, true);
-					copy_location->set_end (next, false, true, divisions);
-					copy_location->set_start (newframe, false, true, divisions);
+					copy_location->set_end (next, false);
+					copy_location->set_start (newpos, false);
 				}
 
 			} else { // end marker
 
 				if (move_both || (*x).move_both) {
-					copy_location->set_end (new_end, divisions);
-					copy_location->set_start (new_start, false, true, divisions);
+					copy_location->set_end (new_end);
+					copy_location->set_start (new_start, false);
 				} else if (new_end > copy_location->start()) {
-					copy_location->set_end (new_end, false, true, divisions);
-				} else if (newframe > 0) {
+					copy_location->set_end (new_end, false);
+				} else if (newpos.positive()) {
 					//_editor->snap_to (next, RoundDownAlways, true);
-					copy_location->set_start (next, false, true, divisions);
-					copy_location->set_end (newframe, false, true, divisions);
+					copy_location->set_start (next, false);
+					copy_location->set_end (newpos, false);
 				}
 			}
 		}
@@ -4711,9 +4736,9 @@ MarkerDrag::motion (GdkEvent* event, bool)
 
 	assert (!_copied_locations.empty());
 
-	show_verbose_cursor_time (newframe);
-	show_view_preview (newframe + _video_sample_offset);
-	_editor->set_snapped_cursor_position(newframe);
+	show_verbose_cursor_time (newpos);
+	show_view_preview (newpos + _video_offset);
+	_editor->set_snapped_cursor_position (newpos);
 }
 
 void
@@ -4783,9 +4808,9 @@ MarkerDrag::finished (GdkEvent* event, bool movement_occurred)
 				in_command = true;
 			}
 			if (location->is_mark()) {
-				location->set_start (((*x).location)->start(), false, true, divisions);
+				location->set_start (((*x).location)->start(), false);
 			} else {
-				location->set (((*x).location)->start(), ((*x).location)->end(), true, divisions);
+				location->set (((*x).location)->start(), ((*x).location)->end());
 			}
 
 			if (location->is_session_range()) {
@@ -4858,10 +4883,11 @@ ControlPointDrag::start_grab (GdkEvent* event, Gdk::Cursor* /*cursor*/)
 
 	// start the grab at the center of the control point so
 	// the point doesn't 'jump' to the mouse after the first drag
-	_fixed_grab_x = _point->get_x() + _editor->sample_to_pixel_unrounded (_point->line().offset());
+	_fixed_grab_x = _point->get_x() + _editor->time_to_pixel_unrounded (timepos_t (_point->line().offset()));
 	_fixed_grab_y = _point->get_y();
 
-	setup_snap_delta (MusicSample (_editor->pixel_to_sample (_fixed_grab_x), 0));
+#warning NUTEMPO is it right that this forced to be samples?
+	setup_snap_delta (timepos_t (_editor->pixel_to_sample (_fixed_grab_x)));
 
 	float const fraction = 1 - (_point->get_y() / _point->line().height());
 	show_verbose_cursor_text (_point->line().get_verbose_cursor_string (fraction));
@@ -4914,14 +4940,14 @@ ControlPointDrag::motion (GdkEvent* event, bool first_motion)
 		cy = zero_gain_y;
 	}
 
-	MusicSample cx_mf (_editor->pixel_to_sample (cx) + snap_delta (event->button.state), 0);
+	timepos_t cx_pos (timepos_t (_editor->pixel_to_sample (cx)) + snap_delta (event->button.state));
 
 	if (!_x_constrained && need_snap) {
-		_editor->snap_to_with_modifier (cx_mf, event);
+		_editor->snap_to_with_modifier (cx_pos, event);
 	}
 
-	cx_mf.sample -= snap_delta (event->button.state);
-	cx_mf.sample = min (cx_mf.sample, _point->line().maximum_time() + _point->line().offset());
+	cx_pos.shift_earlier (snap_delta (event->button.state));
+	cx_pos = min (cx_pos, _point->line().maximum_time() + _point->line().offset());
 
 	float const fraction = 1.0 - (cy / _point->line().height());
 
@@ -4931,7 +4957,7 @@ ControlPointDrag::motion (GdkEvent* event, bool first_motion)
 		_point->line().start_drag_single (_point, _fixed_grab_x, initial_fraction);
 	}
 	pair<float, float> result;
-	result = _point->line().drag_motion (_editor->sample_to_pixel_unrounded (cx_mf.sample), fraction, false, _pushing, _final_index);
+	result = _point->line().drag_motion (_editor->time_to_pixel_unrounded (cx_pos), fraction, false, _pushing, _final_index);
 	show_verbose_cursor_text (_point->line().get_verbose_cursor_relative_string (result.first, result.second));
 }
 
@@ -5126,7 +5152,7 @@ FeatureLineDrag::start_grab (GdkEvent* event, Gdk::Cursor* /*cursor*/)
 
 	_arv = reinterpret_cast<AudioRegionView*> (_item->get_data ("regionview"));
 
-	_max_x = _editor->sample_to_pixel(_arv->get_duration());
+	_max_x = _editor->duration_to_pixels (_arv->get_duration());
 }
 
 void
@@ -5183,33 +5209,33 @@ void
 RubberbandSelectDrag::start_grab (GdkEvent* event, Gdk::Cursor *)
 {
 	Drag::start_grab (event);
-	show_verbose_cursor_time (adjusted_current_sample (event, UIConfiguration::instance().get_rubberbanding_snaps_to_grid()));
+	show_verbose_cursor_time (adjusted_current_time (event, UIConfiguration::instance().get_rubberbanding_snaps_to_grid()));
 }
 
 void
 RubberbandSelectDrag::motion (GdkEvent* event, bool)
 {
-	samplepos_t start;
-	samplepos_t end;
+	timepos_t start;
+	timepos_t end;
 	double y1;
 	double y2;
-	samplepos_t const pf = adjusted_current_sample (event, UIConfiguration::instance().get_rubberbanding_snaps_to_grid());
-	MusicSample grab (grab_sample (), 0);
+	timepos_t const pf = adjusted_current_time (event, UIConfiguration::instance().get_rubberbanding_snaps_to_grid());
+	timepos_t grab (grab_time ());
 
 	if (UIConfiguration::instance().get_rubberbanding_snaps_to_grid ()) {
 		_editor->snap_to_with_modifier (grab, event, RoundNearest, SnapToGrid_Scaled);
 	} else {
-		grab.sample = raw_grab_sample ();
+		grab = raw_grab_time ();
 	}
 
 	/* base start and end on initial click position */
 
-	if (pf < grab.sample) {
+	if (pf < grab) {
 		start = pf;
-		end = grab.sample;
+		end = grab;
 	} else {
 		end = pf;
-		start = grab.sample;
+		start = grab;
 	}
 
 	if (current_pointer_y() < grab_y()) {
@@ -5222,8 +5248,8 @@ RubberbandSelectDrag::motion (GdkEvent* event, bool)
 
 	if (start != end || y1 != y2) {
 
-		double x1 = _editor->sample_to_pixel (start);
-		double x2 = _editor->sample_to_pixel (end);
+		double x1 = _editor->time_to_pixel (start);
+		double x2 = _editor->time_to_pixel (end);
 		const double min_dimension = 2.0;
 
 		if (_vertical_only) {
@@ -5268,13 +5294,13 @@ RubberbandSelectDrag::motion (GdkEvent* event, bool)
 void
 RubberbandSelectDrag::do_select_things (GdkEvent* event, bool drag_in_progress)
 {
-	samplepos_t x1;
-	samplepos_t x2;
-	samplepos_t grab = grab_sample ();
-	samplepos_t lpf = last_pointer_sample ();
+	timepos_t x1;
+	timepos_t x2;
+	timepos_t grab = grab_time ();
+	timepos_t lpf = last_pointer_time ();
 
 	if (!UIConfiguration::instance().get_rubberbanding_snaps_to_grid ()) {
-		grab = raw_grab_sample ();
+		grab = raw_grab_time ();
 		lpf = _editor->pixel_to_sample_from_event (last_pointer_x());
 	}
 
@@ -5363,11 +5389,10 @@ TimeFXDrag::start_grab (GdkEvent* event, Gdk::Cursor* cursor)
 	Drag::start_grab (event, cursor);
 
 	_editor->get_selection().add (_primary);
+	timepos_t where (_primary->region()->nt_position());
+	setup_snap_delta (_primary->region()->nt_position());
 
-	MusicSample where (_primary->region()->position(), 0);
-	setup_snap_delta (where);
-
-	show_verbose_cursor_duration (where.sample, adjusted_current_sample (event), 0);
+	show_verbose_cursor_duration (where, adjusted_current_time (event), 0);
 }
 
 void
@@ -5378,16 +5403,17 @@ TimeFXDrag::motion (GdkEvent* event, bool)
 	pair<TimeAxisView*, double> const tv = _editor->trackview_by_y_position (grab_y());
 	int layer = tv.first->layer_display() == Overlaid ? 0 : tv.second;
 	int layers = tv.first->layer_display() == Overlaid ? 1 : cv->layers();
-	MusicSample pf (_editor->canvas_event_sample (event) + snap_delta (event->button.state), 0);
+#warning NUTEMPO should this really be in samples always
+	timepos_t pf (timepos_t (_editor->canvas_event_sample (event)) + snap_delta (event->button.state));
 
 	_editor->snap_to_with_modifier (pf, event);
-	pf.sample -= snap_delta (event->button.state);
+	pf.shift_earlier (snap_delta (event->button.state));
 
-	if (pf.sample > rv->region()->position()) {
-		rv->get_time_axis_view().show_timestretch (rv->region()->position(), pf.sample, layers, layer);
+	if (pf > rv->region()->nt_position()) {
+		rv->get_time_axis_view().show_timestretch (rv->region()->nt_position(), pf, layers, layer);
 	}
 
-	show_verbose_cursor_duration (_primary->region()->position(), pf.sample, 0);
+	show_verbose_cursor_duration (_primary->region()->nt_position(), pf);
 }
 
 void
@@ -5398,7 +5424,8 @@ TimeFXDrag::finished (GdkEvent* event, bool movement_occurred)
 	   parameters for the timestretch.
 	*/
 
-	float fraction = 1.0;
+	ratio_t fraction (1, 1);
+	float ffraction;
 
 	if (movement_occurred) {
 
@@ -5406,21 +5433,21 @@ TimeFXDrag::finished (GdkEvent* event, bool movement_occurred)
 
 		_primary->get_time_axis_view().hide_timestretch ();
 
-		samplepos_t adjusted_sample_pos = adjusted_current_sample (event);
+		timepos_t adjusted_pos = adjusted_current_time (event);
 
-		if (adjusted_sample_pos < _primary->region()->position()) {
+		if (adjusted_pos < _primary->region()->nt_position()) {
 			/* backwards drag of the left edge - not usable */
 			return;
 		}
 
-		samplecnt_t newlen = adjusted_sample_pos - _primary->region()->position();
+		timecnt_t newlen = _primary->region()->nt_position().distance (adjusted_pos);
 
-		fraction = (double) newlen / (double) _primary->region()->length();
+		fraction = newlen / _primary->region()->nt_length();
 
 #ifndef USE_RUBBERBAND
 		// Soundtouch uses fraction / 100 instead of normal (/ 1)
 		if (_primary->region()->data_type() == DataType::AUDIO) {
-			fraction = (float) ((double) newlen - (double) _primary->region()->length()) / ((double) newlen) * 100.0f;
+			fraction = ((newlen - _primary->region()->nt_length()) / newlen) * 100;
 		}
 #endif
 	}
@@ -5459,7 +5486,7 @@ ScrubDrag::start_grab (GdkEvent* event, Gdk::Cursor *)
 void
 ScrubDrag::motion (GdkEvent* /*event*/, bool)
 {
-	_editor->scrub (adjusted_current_sample (0, false), _drags->current_pointer_x ());
+	_editor->scrub (adjusted_current_time (0, false).samples(), _drags->current_pointer_x ());
 }
 
 void
@@ -5487,8 +5514,8 @@ SelectionDrag::SelectionDrag (Editor* e, ArdourCanvas::Item* i, Operation o)
 	DEBUG_TRACE (DEBUG::Drags, "New SelectionDrag\n");
 
 	if (_time_selection_at_start) {
-		start_at_start = _editor->get_selection().time.start();
-		end_at_start = _editor->get_selection().time.end_sample();
+		start_at_start = _editor->get_selection().time.start_time();
+		end_at_start = _editor->get_selection().time.end_time();
 	}
 }
 
@@ -5536,27 +5563,27 @@ SelectionDrag::start_grab (GdkEvent* event, Gdk::Cursor*)
 	}
 
 	if (_operation == SelectionMove) {
-		show_verbose_cursor_time (_editor->selection->time[_editor->clicked_selection].start);
+		show_verbose_cursor_time (_editor->selection->time[_editor->clicked_selection].start());
 	} else {
-		show_verbose_cursor_time (adjusted_current_sample (event));
+		show_verbose_cursor_time (adjusted_current_time (event));
 	}
 }
 
 void
-SelectionDrag::setup_pointer_sample_offset ()
+SelectionDrag::setup_pointer_offset ()
 {
 	switch (_operation) {
 	case CreateSelection:
-		_pointer_sample_offset = 0;
+		_pointer_offset = 0;
 		break;
 
 	case SelectionStartTrim:
 	case SelectionMove:
-		_pointer_sample_offset = raw_grab_sample() - _editor->selection->time[_editor->clicked_selection].start;
+		_pointer_offset = _editor->selection->time[_editor->clicked_selection].start().distance (raw_grab_time());
 		break;
 
 	case SelectionEndTrim:
-		_pointer_sample_offset = raw_grab_sample() - _editor->selection->time[_editor->clicked_selection].end;
+		_pointer_offset = _editor->selection->time[_editor->clicked_selection].end().distance (raw_grab_time());
 		break;
 
 	case SelectionExtend:
@@ -5567,14 +5594,14 @@ SelectionDrag::setup_pointer_sample_offset ()
 void
 SelectionDrag::motion (GdkEvent* event, bool first_move)
 {
-	samplepos_t start = 0;
-	samplepos_t end = 0;
-	samplecnt_t length = 0;
-	samplecnt_t distance = 0;
-	MusicSample start_mf (0, 0);
-	samplepos_t const pending_position = adjusted_current_sample (event);
+	timepos_t start;
+	timepos_t end;
+	timecnt_t length;
+	timecnt_t distance;
+	timepos_t start_mf;
+	timepos_t const pending_position = adjusted_current_time (event);
 
-	if (_operation != CreateSelection && pending_position == last_pointer_sample()) {
+	if (_operation != CreateSelection && pending_position == last_pointer_time()) {
 		return;
 	}
 
@@ -5585,22 +5612,22 @@ SelectionDrag::motion (GdkEvent* event, bool first_move)
 	switch (_operation) {
 	case CreateSelection:
 	{
-		MusicSample grab (grab_sample (), 0);
+		timepos_t grab (grab_time());
 		if (first_move) {
-			grab.sample = adjusted_current_sample (event, false);
-			if (grab.sample < pending_position) {
+			grab = adjusted_current_time (event, false);
+			if (grab < pending_position) {
 				_editor->snap_to (grab, RoundDownMaybe);
 			}  else {
 				_editor->snap_to (grab, RoundUpMaybe);
 			}
 		}
 
-		if (pending_position < grab.sample) {
+		if (pending_position < grab) {
 			start = pending_position;
-			end = grab.sample;
+			end = grab;
 		} else {
 			end = pending_position;
-			start = grab.sample;
+			start = grab;
 		}
 
 		/* first drag: Either add to the selection
@@ -5711,7 +5738,7 @@ SelectionDrag::motion (GdkEvent* event, bool first_move)
 
 	case SelectionStartTrim:
 
-		end = _editor->selection->time[_editor->clicked_selection].end;
+		end = _editor->selection->time[_editor->clicked_selection].end();
 
 		if (pending_position > end) {
 			start = end;
@@ -5722,7 +5749,7 @@ SelectionDrag::motion (GdkEvent* event, bool first_move)
 
 	case SelectionEndTrim:
 
-		start = _editor->selection->time[_editor->clicked_selection].start;
+		start = _editor->selection->time[_editor->clicked_selection].start();
 
 		if (pending_position < start) {
 			end = start;
@@ -5734,17 +5761,17 @@ SelectionDrag::motion (GdkEvent* event, bool first_move)
 
 	case SelectionMove:
 
-		start = _editor->selection->time[_editor->clicked_selection].start;
-		end = _editor->selection->time[_editor->clicked_selection].end;
+		start = _editor->selection->time[_editor->clicked_selection].start();
+		end = _editor->selection->time[_editor->clicked_selection].end();
 
-		length = end - start;
-		distance = pending_position - start;
+		length = start.distance (end);;
+		distance = start.distance (pending_position);
 		start = pending_position;
 
-		start_mf.sample = start;
+		start_mf = start;
 		_editor->snap_to (start_mf);
 
-		end = start_mf.sample + length;
+		end = start_mf + length;
 
 		break;
 
@@ -5795,11 +5822,11 @@ SelectionDrag::finished (GdkEvent* event, bool movement_occurred)
 					s->request_play_range (&_editor->selection->time, true);  //play the newly selected range
 				}
 			} else if ( !s->transport_rolling() && UIConfiguration::instance().get_follow_edits() ) {
-				s->request_locate (_editor->get_selection().time.start());
+				s->request_locate (_editor->get_selection().time.start_sample());
 			}
 
 			if (_editor->get_selection().time.length() != 0) {
-				s->set_range_selection (_editor->get_selection().time.start(), _editor->get_selection().time.end_sample());
+				s->set_range_selection (_editor->get_selection().time.start_time(), _editor->get_selection().time.end_time ());
 			} else {
 				s->clear_range_selection ();
 			}
@@ -5818,9 +5845,9 @@ SelectionDrag::finished (GdkEvent* event, bool movement_occurred)
 
 		if (_operation == SelectionExtend) {
 			if (_time_selection_at_start) {
-				samplepos_t pos = adjusted_current_sample (event, false);
-				samplepos_t start = min (pos, start_at_start);
-				samplepos_t end = max (pos, end_at_start);
+				timepos_t pos = adjusted_current_time (event, false);
+				timepos_t start = min (pos, start_at_start);
+				timepos_t end = max (pos, end_at_start);
 				_editor->selection->set (start, end);
 			}
 		} else {
@@ -5911,14 +5938,14 @@ RangeMarkerBarDrag::start_grab (GdkEvent* event, Gdk::Cursor *)
 
 	Drag::start_grab (event, cursor);
 
-	show_verbose_cursor_time (adjusted_current_sample (event));
+	show_verbose_cursor_time (adjusted_current_time (event));
 }
 
 void
 RangeMarkerBarDrag::motion (GdkEvent* event, bool first_move)
 {
-	samplepos_t start = 0;
-	samplepos_t end = 0;
+	timepos_t start;
+	timepos_t end;
 	ArdourCanvas::Rectangle *crect;
 
 	switch (_operation) {
@@ -5940,18 +5967,18 @@ RangeMarkerBarDrag::motion (GdkEvent* event, bool first_move)
 		break;
 	}
 
-	samplepos_t const pf = adjusted_current_sample (event);
+	timepos_t const pf = adjusted_current_time (event);
 
 	if (_operation == CreateSkipMarker || _operation == CreateRangeMarker || _operation == CreateTransportMarker || _operation == CreateCDMarker) {
-		MusicSample grab (grab_sample (), 0);
+		timepos_t grab (grab_time());
 		_editor->snap_to (grab);
 
-		if (pf < grab_sample()) {
+		if (pf < grab_time()) {
 			start = pf;
-			end = grab.sample;
+			end = grab;
 		} else {
 			end = pf;
-			start = grab.sample;
+			start = grab;
 		}
 
 		/* first drag: Either add to the selection
@@ -5974,8 +6001,8 @@ RangeMarkerBarDrag::motion (GdkEvent* event, bool first_move)
 	if (start != end) {
 		_editor->temp_location->set (start, end);
 
-		double x1 = _editor->sample_to_pixel (start);
-		double x2 = _editor->sample_to_pixel (end);
+		double x1 = _editor->time_to_pixel (start);
+		double x2 = _editor->time_to_pixel (end);
 		crect->set_x0 (x1);
 		crect->set_x1 (x2);
 
@@ -6019,9 +6046,8 @@ RangeMarkerBarDrag::finished (GdkEvent* event, bool movement_occurred)
 				flags = Location::IsRangeMarker;
 				_editor->range_bar_drag_rect->hide();
 			}
-			newloc = new Location (
-				*_editor->session(), _editor->temp_location->start(), _editor->temp_location->end(), rangename, (Location::Flags) flags
-				, _editor->get_grid_music_divisions (event->button.state));
+
+			newloc = new Location (*_editor->session(), _editor->temp_location->start(), _editor->temp_location->end(), rangename, (Location::Flags) flags);
 
 			_editor->session()->locations()->add (newloc, true);
 			XMLNode &after = _editor->session()->locations()->get_state();
@@ -6053,17 +6079,17 @@ RangeMarkerBarDrag::finished (GdkEvent* event, bool movement_occurred)
 
 		} else { /* operation == CreateRangeMarker || CreateSkipMarker */
 
-			samplepos_t start;
-			samplepos_t end;
+			timepos_t start;
+			timepos_t end;
 
-			_editor->session()->locations()->marks_either_side (grab_sample(), start, end);
+			_editor->session()->locations()->marks_either_side (grab_time(), start, end);
 
-			if (end == max_samplepos) {
-				end = _editor->session()->current_end_sample ();
+			if (end == timepos_t::max (end.time_domain())) {
+				end = _editor->session()->current_end ();
 			}
 
-			if (start == max_samplepos) {
-				start = _editor->session()->current_start_sample ();
+			if (start == timepos_t::max (start.time_domain())) {
+				start = _editor->session()->current_start ();
 			}
 
 			switch (_editor->mouse_mode) {
@@ -6097,8 +6123,8 @@ RangeMarkerBarDrag::aborted (bool movement_occurred)
 void
 RangeMarkerBarDrag::update_item (Location* location)
 {
-	double const x1 = _editor->sample_to_pixel (location->start());
-	double const x2 = _editor->sample_to_pixel (location->end());
+	double const x1 = _editor->time_to_pixel (location->start());
+	double const x2 = _editor->time_to_pixel (location->end());
 
 	_drag_rect->set_x0 (x1);
 	_drag_rect->set_x1 (x2);
@@ -6106,9 +6132,7 @@ RangeMarkerBarDrag::update_item (Location* location)
 
 NoteDrag::NoteDrag (Editor* e, ArdourCanvas::Item* i)
 	: Drag (e, i)
-	, _cumulative_dx (0)
 	, _cumulative_dy (0)
-	, _earliest (0.0)
 	, _was_selected (false)
 	, _copy (false)
 {
@@ -6121,10 +6145,9 @@ NoteDrag::NoteDrag (Editor* e, ArdourCanvas::Item* i)
 }
 
 void
-NoteDrag::setup_pointer_sample_offset ()
+NoteDrag::setup_pointer_offset ()
 {
-	_pointer_sample_offset = raw_grab_sample()
-		- _editor->session()->tempo_map().sample_at_quarter_note (_region->session_relative_qn (_primary->note()->time().to_double()));
+	_pointer_offset = _region->region()->source_beats_to_absolute_time (_primary->note()->time()).distance (raw_grab_time());
 }
 
 void
@@ -6138,7 +6161,7 @@ NoteDrag::start_grab (GdkEvent* event, Gdk::Cursor *)
 		_copy = false;
 	}
 
-	setup_snap_delta (MusicSample (_region->source_beats_to_absolute_samples (_primary->note()->time ()), 0));
+	setup_snap_delta (_region->region()->source_beats_to_absolute_time (_primary->note()->time ()));
 
 	if (!(_was_selected = _primary->selected())) {
 
@@ -6163,35 +6186,30 @@ NoteDrag::start_grab (GdkEvent* event, Gdk::Cursor *)
 }
 
 /** @return Current total drag x change in quarter notes */
-Temporal::Beats
+Temporal::timecnt_t
 NoteDrag::total_dx (GdkEvent * event) const
 {
 	if (_x_constrained) {
-		return Temporal::Beats();
+		return timecnt_t::zero (Temporal::BeatTime);
 	}
 
-	TempoMap& map (_editor->session()->tempo_map());
-
-	/* dx in samples */
-	sampleoffset_t const dx = _editor->pixel_to_sample (_drags->current_pointer_x() - grab_x());
-
-	/* primary note time */
-	sampleoffset_t const n = map.sample_at_quarter_note (_region->session_relative_qn (_primary->note()->time()));
+	/* dx in as samples, because we can't do any better */
+	timecnt_t const dx = timecnt_t (_editor->pixel_to_sample (_drags->current_pointer_x() - grab_x()), timepos_t());
 
 	/* primary note time in quarter notes */
-	double const n_qn = _region->session_relative_qn (_primary->note()->time());
+	timepos_t const n_qn = _region->region()->source_beats_to_absolute_time (_primary->note()->time());
 
-	/* new time of the primary note in session samples */
-	sampleoffset_t st = n + dx + snap_delta (event->button.state);
+	/* new session relative time of the primary note (will be in beats) */
+	timepos_t snap = n_qn + dx + snap_delta (event->button.state);
 
-	/* possibly snap and return corresponding delta in quarter notes */
-	MusicSample snap (st, 0);
-	_editor->snap_to_with_modifier (snap, event, RoundNearest, SnapToGrid_Unscaled);
-	Temporal::Beats ret = Temporal::Beats::from_double (map.exact_qn_at_sample (snap.sample, snap.division) - n_qn - snap_delta_music (event->button.state));
+	/* possibly snap and return corresponding delta (will be in beats) */
+	_editor->snap_to_with_modifier (snap, event);
+
+	timecnt_t ret = timecnt_t (snap.earlier (n_qn).earlier (snap_delta (event->button.state)));
 
 	/* prevent the earliest note being dragged earlier than the region's start position */
-	if (_earliest + ret < _region->midi_region()->start_beats()) {
-		ret -= (_earliest + ret) - _region->midi_region()->start_beats();
+	if (ret + _earliest < _region->region()->nt_start()) {
+		ret -= (ret + _earliest) -  _region->region()->nt_start();
 	}
 
 	return ret;
@@ -6220,7 +6238,7 @@ void
 NoteDrag::motion (GdkEvent * event, bool first_move)
 {
 	if (first_move) {
-		_earliest = _region->earliest_in_selection().to_double();
+		_earliest = timepos_t (_region->earliest_in_selection());
 		if (_copy) {
 			/* make copies of all the selected notes */
 			_primary = _region->copy_selection (_primary);
@@ -6228,20 +6246,20 @@ NoteDrag::motion (GdkEvent * event, bool first_move)
 	}
 
 	/* Total change in x and y since the start of the drag */
-	Temporal::Beats const dx_qn = total_dx (event);
+	timecnt_t const dx_qn = total_dx (event);
 	int8_t const dy = total_dy ();
 
 	/* Now work out what we have to do to the note canvas items to set this new drag delta */
-	double const tdx = _x_constrained ? 0 : dx_qn - _cumulative_dx;
+	timecnt_t const tdx = _x_constrained ? timecnt_t::zero (_cumulative_dx.time_domain()) : dx_qn - _cumulative_dx;
 	double const tdy = _y_constrained ? 0 : -dy * _note_height - _cumulative_dy;
 
-	if (tdx || tdy) {
+	if (!tdx.zero() || tdy) {
 		_cumulative_dx = dx_qn;
 		_cumulative_dy += tdy;
 
 		int8_t note_delta = total_dy();
 
-		if (tdx || tdy) {
+		if (!tdx.zero() || tdy) {
 			if (_copy) {
 				_region->move_copies (dx_qn, tdy, note_delta);
 			} else {
@@ -6258,7 +6276,7 @@ NoteDrag::motion (GdkEvent * event, bool first_move)
 
 			_region->show_verbose_cursor_for_new_note_value (_primary->note(), new_note);
 
-			_editor->set_snapped_cursor_position( _region->source_beats_to_absolute_samples(_primary->note()->time()) );
+			_editor->set_snapped_cursor_position( _region->region()->source_beats_to_absolute_time (_primary->note()->time()) );
 		}
 	}
 }
@@ -6368,7 +6386,7 @@ AutomationRangeDrag::setup (list<boost::shared_ptr<AutomationLine> > const & lin
 		list<boost::shared_ptr<AutomationLine> >::const_iterator j = i;
 		++j;
 
-		pair<samplepos_t, samplepos_t> r = (*i)->get_point_x_range ();
+		pair<timepos_t, timepos_t> r = (*i)->get_point_x_range ();
 
 		//need a special detection for automation lanes (not region gain line)
 		//TODO:  if we implement automation regions, this check can probably be removed
@@ -6382,7 +6400,7 @@ AutomationRangeDrag::setup (list<boost::shared_ptr<AutomationLine> > const & lin
 		/* check this range against all the TimelineRanges that we are using */
 		list<TimelineRange>::const_iterator k = _ranges.begin ();
 		while (k != _ranges.end()) {
-			if (k->coverage (r.first, r.second) != Evoral::OverlapNone) {
+			if (k->coverage (r.first, r.second) != Temporal::OverlapNone) {
 				break;
 			}
 			++k;
@@ -6410,7 +6428,7 @@ AutomationRangeDrag::y_fraction (double global_y) const
 }
 
 double
-AutomationRangeDrag::value (boost::shared_ptr<AutomationList> list, double x) const
+AutomationRangeDrag::value (boost::shared_ptr<AutomationList> list, timepos_t const & x) const
 {
 	const double v = list->eval(x);
 	return _integral ? rint(v) : v;
@@ -6458,10 +6476,10 @@ AutomationRangeDrag::motion (GdkEvent*, bool first_move)
 			/* add guard points */
 			for (list<TimelineRange>::const_iterator i = _ranges.begin(); i != _ranges.end(); ++i) {
 
-				samplecnt_t const half = (i->start + i->end) / 2;
+				timepos_t const half = (i->start() + i->end()) / 2;
 
 				for (list<Line>::iterator j = _lines.begin(); j != _lines.end(); ++j) {
-					if (j->range.first > i->start || j->range.second < i->start) {
+					if (j->range.first > i->start() || j->range.second < i->start()) {
 						continue;
 					}
 
@@ -6471,11 +6489,12 @@ AutomationRangeDrag::motion (GdkEvent*, bool first_move)
 					 * 64 samples length plucked out of thin air.
 					 */
 
-					samplepos_t a = i->start + 64;
+					timepos_t a = i->start() + timepos_t (64);
 					if (a > half) {
 						a = half;
 					}
-
+#warning NUTEMPO figure out what this code is/was doing and replace it
+#if 0
 					double const p = j->line->time_converter().from (i->start - j->line->time_converter().origin_b ());
 					double const q = j->line->time_converter().from (a - j->line->time_converter().origin_b ());
 
@@ -6487,12 +6506,13 @@ AutomationRangeDrag::motion (GdkEvent*, bool first_move)
 						_editor->session()->add_command (
 							new MementoCommand<AutomationList>(*the_list.get (), &before, &the_list->get_state()));
 					}
+#endif
 				}
 
 				/* same thing for the end */
 				for (list<Line>::iterator j = _lines.begin(); j != _lines.end(); ++j) {
 
-					if (j->range.first > i->end || j->range.second < i->end) {
+					if (j->range.first > i->end() || j->range.second < i->end()) {
 						continue;
 					}
 
@@ -6502,11 +6522,13 @@ AutomationRangeDrag::motion (GdkEvent*, bool first_move)
 					 * 64 samples length plucked out of thin air.
 					 */
 
-					samplepos_t b = i->end - 64;
+					timepos_t b = i->end().earlier (timepos_t (64));
 					if (b < half) {
 						b = half;
 					}
 
+#warning NUTEMPO figure out what this code is/was doing and replace it
+#if 0
 					double const p = j->line->time_converter().from (b - j->line->time_converter().origin_b ());
 					double const q = j->line->time_converter().from (i->end - j->line->time_converter().origin_b ());
 
@@ -6518,6 +6540,7 @@ AutomationRangeDrag::motion (GdkEvent*, bool first_move)
 						_editor->session()->add_command (
 							new MementoCommand<AutomationList>(*the_list.get (), &before, &the_list->get_state()));
 					}
+#endif
 				}
 			}
 
@@ -6533,11 +6556,13 @@ AutomationRangeDrag::motion (GdkEvent*, bool first_move)
 
 					/* here's a control point on this line */
 					ControlPoint* p = i->line->nth (j);
-					double const w = i->line->time_converter().to ((*p->model())->when) + i->line->time_converter().origin_b ();
+#warning NUTEMPO figure out what this code is/was doing and replace it
+					//double const w = i->line->time_converter().to ((*p->model())->when) + i->line->time_converter().origin_b ();
+					double const w = 0;;
 
 					/* see if it's inside a range */
 					list<TimelineRange>::const_iterator k = _ranges.begin ();
-					while (k != _ranges.end() && (k->start >= w || k->end <= w)) {
+					while (k != _ranges.end() && (k->start() >= w || k->end() <= w)) {
 						++k;
 					}
 
@@ -6599,8 +6624,8 @@ DraggingView::DraggingView (RegionView* v, RegionDrag* parent, TimeAxisView* ita
 	layer = v->region()->layer ();
 	initial_y = v->get_canvas_group()->position().y;
 	initial_playlist = v->region()->playlist ();
-	initial_position = v->region()->position ();
-	initial_end = v->region()->position () + v->region()->length ();
+	initial_position = v->region()->nt_position ();
+	initial_end = v->region()->nt_position () + v->region()->nt_length ();
 }
 
 PatchChangeDrag::PatchChangeDrag (Editor* e, PatchChange* i, MidiRegionView* r)
@@ -6610,20 +6635,20 @@ PatchChangeDrag::PatchChangeDrag (Editor* e, PatchChange* i, MidiRegionView* r)
 	, _cumulative_dx (0)
 {
 	DEBUG_TRACE (DEBUG::Drags, string_compose ("New PatchChangeDrag, patch @ %1, grab @ %2\n",
-						   _region_view->source_beats_to_absolute_samples (_patch_change->patch()->time()),
-						   grab_sample()));
+	                                           _region_view->region()->source_beats_to_absolute_time (_patch_change->patch()->time()),
+						   grab_time()));
 }
 
 void
 PatchChangeDrag::motion (GdkEvent* ev, bool)
 {
-	samplepos_t f = adjusted_current_sample (ev);
+	timepos_t f = adjusted_current_time (ev);
 	boost::shared_ptr<Region> r = _region_view->region ();
-	f = max (f, r->position ());
-	f = min (f, r->last_sample ());
+	f = max (f, r->nt_position ());
+	f = min (f, r->nt_last ());
 
-	samplecnt_t const dxf = f - grab_sample(); // permitted dx in samples
-	double const dxu = _editor->sample_to_pixel (dxf); // permitted fx in units
+	timecnt_t const dxf = grab_time().distance (f); // permitted dx
+	double const dxu = _editor->duration_to_pixels (dxf); // permitted fx in units
 	_patch_change->move (ArdourCanvas::Duple (dxu - _cumulative_dx, 0));
 	_cumulative_dx = dxu;
 }
@@ -6639,14 +6664,11 @@ PatchChangeDrag::finished (GdkEvent* ev, bool movement_occurred)
 	}
 
 	boost::shared_ptr<Region> r (_region_view->region ());
-	samplepos_t f = adjusted_current_sample (ev);
-	f = max (f, r->position ());
-	f = min (f, r->last_sample ());
+	timepos_t f = adjusted_current_time (ev);
+	f = max (f, r->nt_position ());
+	f = min (f, r->nt_last ());
 
-	_region_view->move_patch_change (
-		*_patch_change,
-		_region_view->region_samples_to_region_beats (f - (r->position() - r->start()))
-		);
+	_region_view->move_patch_change (*_patch_change, _region_view->region()->absolute_time_to_region_beats (f));
 }
 
 void
@@ -6656,10 +6678,10 @@ PatchChangeDrag::aborted (bool)
 }
 
 void
-PatchChangeDrag::setup_pointer_sample_offset ()
+PatchChangeDrag::setup_pointer_offset ()
 {
 	boost::shared_ptr<Region> region = _region_view->region ();
-	_pointer_sample_offset = raw_grab_sample() - _region_view->source_beats_to_absolute_samples (_patch_change->patch()->time());
+	_pointer_offset = region->source_beats_to_absolute_time (_patch_change->patch()->time()).distance (raw_grab_time());
 }
 
 MidiRubberbandSelectDrag::MidiRubberbandSelectDrag (Editor* e, MidiRegionView* rv)
@@ -6670,7 +6692,7 @@ MidiRubberbandSelectDrag::MidiRubberbandSelectDrag (Editor* e, MidiRegionView* r
 }
 
 void
-MidiRubberbandSelectDrag::select_things (int button_state, samplepos_t x1, samplepos_t x2, double y1, double y2, bool /*drag_in_progress*/)
+MidiRubberbandSelectDrag::select_things (int button_state, timepos_t const & x1, timepos_t const & x2, double y1, double y2, bool /*drag_in_progress*/)
 {
 	_region_view->update_drag_selection (
 		x1, x2, y1, y2,
@@ -6691,7 +6713,7 @@ MidiVerticalSelectDrag::MidiVerticalSelectDrag (Editor* e, MidiRegionView* rv)
 }
 
 void
-MidiVerticalSelectDrag::select_things (int button_state, samplepos_t /*x1*/, samplepos_t /*x2*/, double y1, double y2, bool /*drag_in_progress*/)
+MidiVerticalSelectDrag::select_things (int button_state, timepos_t const & /*x1*/, timepos_t const & /*x2*/, double y1, double y2, bool /*drag_in_progress*/)
 {
 	double const y = _region_view->midi_view()->y_position ();
 
@@ -6718,7 +6740,7 @@ EditorRubberbandSelectDrag::EditorRubberbandSelectDrag (Editor* e, ArdourCanvas:
 }
 
 void
-EditorRubberbandSelectDrag::select_things (int button_state, samplepos_t x1, samplepos_t x2, double y1, double y2, bool drag_in_progress)
+EditorRubberbandSelectDrag::select_things (int button_state, timepos_t const & x1, timepos_t const & x2, double y1, double y2, bool drag_in_progress)
 {
 	if (drag_in_progress) {
 		/* We just want to select things at the end of the drag, not during it */
@@ -6729,7 +6751,7 @@ EditorRubberbandSelectDrag::select_things (int button_state, samplepos_t x1, sam
 
 	_editor->begin_reversible_selection_op (X_("rubberband selection"));
 
-	_editor->select_all_within (x1, x2 - 1, y1, y2, _editor->track_views, op, false);
+	_editor->select_all_within (x1, x2.decrement(), y1, y2, _editor->track_views, op, false);
 
 	_editor->commit_reversible_selection_op ();
 }
@@ -6761,15 +6783,32 @@ NoteCreateDrag::~NoteCreateDrag ()
 	delete _drag_rect;
 }
 
-samplecnt_t
-NoteCreateDrag::grid_samples (samplepos_t t) const
+Temporal::Beats
+NoteCreateDrag::grid_aligned_beats (timepos_t const & pos, GdkEvent const * event) const
 {
+	Temporal::Beats beats;
 
-	const Temporal::Beats grid_beats = _region_view->get_grid_beats (t);
-	const Temporal::Beats t_beats = _region_view->region_samples_to_region_beats (t);
+#warning NUTEMPO needs new tempo map API
+#if 0
+	TempoMap& map (_editor->session()->tempo_map());
+	const int32_t divisions = _editor->get_grid_music_divisions (event->button.state);
 
-	return _region_view->region_beats_to_region_samples (t_beats + grid_beats)
-		- _region_view->region_beats_to_region_samples (t_beats);
+	switch (divisions) {
+	case 0:  /* no rounding */
+	case 1:  /* round to beat */
+		beats = pos.beats ();
+		break;
+	case -1: /* round to bar */
+#warning NUTEMPO need map/BBT API
+		//map.quarter_note_at (map.metric_at (pos).meter().round_to_bar (map.bbt_at (pos)));
+		break;
+	default: /* round to some beat subdivision */
+		beats = (pos).beats().round_to_subdivision (divisions, Temporal::RoundNearest);
+		break;
+	}
+#endif
+
+	return beats;
 }
 
 void
@@ -6778,35 +6817,32 @@ NoteCreateDrag::start_grab (GdkEvent* event, Gdk::Cursor* cursor)
 	Drag::start_grab (event, cursor);
 
 	_drag_rect = new ArdourCanvas::Rectangle (_region_view->get_canvas_group ());
-	TempoMap& map (_editor->session()->tempo_map());
 
-	const samplepos_t pf = _drags->current_pointer_sample ();
+	const timepos_t pos = _drags->current_pointer_time ();
+	Temporal::Beats grid_beats = grid_aligned_beats (pos, event);
 	const int32_t divisions = _editor->get_grid_music_divisions (event->button.state);
-
-	const Temporal::Beats grid_beats = _region_view->get_grid_beats (pf);
-
-	double eqaf = map.exact_qn_at_sample (pf, divisions);
 
 	if (divisions != 0) {
 
-		const double qaf = map.quarter_note_at_sample (pf);
+		const Temporal::Beats unaligned_beats = pos.beats ();
 
 		/* Hack so that we always snap to the note that we are over, instead of snapping
 		   to the next one if we're more than halfway through the one we're over.
 		*/
 
-		const double rem = eqaf - qaf;
-		if (rem >= 0.0) {
-			eqaf -= grid_beats.to_double();
+		const Temporal::Beats rem = grid_beats - unaligned_beats;
+
+		if (rem >= std::numeric_limits<Temporal::Beats>::lowest ()) {
+			grid_beats = rem;
 		}
 	}
 
-	_note[0] = map.sample_at_quarter_note (eqaf) - _region_view->region()->position();
+	_note[0] = grid_beats;
 	/* minimum initial length is grid beats */
-	_note[1] = map.sample_at_quarter_note (eqaf + grid_beats.to_double()) - _region_view->region()->position();
+	_note[1] = grid_beats + grid_beats;
 
-	double const x0 = _editor->sample_to_pixel (_note[0]);
-	double const x1 = _editor->sample_to_pixel (_note[1]);
+	double const x0 = _editor->time_to_pixel (_note[0]);
+	double const x1 = _editor->time_to_pixel (_note[1]);
 	double const y = _region_view->note_to_y (_region_view->y_to_note (y_to_region (event->button.y)));
 
 	_drag_rect->set (ArdourCanvas::Rect (x0, y, x1, y + floor (_region_view->midi_stream_view()->note_height ())));
@@ -6818,31 +6854,32 @@ NoteCreateDrag::start_grab (GdkEvent* event, Gdk::Cursor* cursor)
 void
 NoteCreateDrag::motion (GdkEvent* event, bool)
 {
-	TempoMap& map (_editor->session()->tempo_map());
-	const samplepos_t pf = _drags->current_pointer_sample ();
+	const timepos_t pos = _drags->current_pointer_time ();
 	const int32_t divisions = _editor->get_grid_music_divisions (event->button.state);
-	double eqaf = map.exact_qn_at_sample (pf, divisions);
+	Temporal::Beats aligned_beats = grid_aligned_beats (pos, event);
 
-	if (divisions != 0) {
+	if (_editor->snap_mode() != SnapOff) {
 
-		const Temporal::Beats grid_beats = _region_view->get_grid_beats (pf);
+		const Temporal::Beats grid_beats = _region_view->get_grid_beats (pos);
+		const Temporal::Beats unaligned_beats = pos.beats ();
 
-		const double qaf = map.quarter_note_at_sample (pf);
 		/* Hack so that we always snap to the note that we are over, instead of snapping
 		   to the next one if we're more than halfway through the one we're over.
 		*/
 
-		const double rem = eqaf - qaf;
-		if (rem >= 0.0) {
-			eqaf -= grid_beats.to_double();
+		const Temporal::Beats rem = aligned_beats - unaligned_beats;
+
+		if (rem >= std::numeric_limits<Temporal::Beats>::lowest()) {
+			aligned_beats -= grid_beats;
 		}
 
-		eqaf += grid_beats.to_double();
+		aligned_beats += grid_beats;
 	}
-	_note[1] = max ((samplepos_t)0, map.sample_at_quarter_note (eqaf) - _region_view->region()->position ());
 
-	double const x0 = _editor->sample_to_pixel (_note[0]);
-	double const x1 = _editor->sample_to_pixel (_note[1]);
+	_note[1] = max (Temporal::Beats(), aligned_beats - _region_view->region()->nt_position ().beats());
+
+	double const x0 = _editor->time_to_pixel (_note[0]);
+	double const x1 = _editor->time_to_pixel (_note[1]);
 	_drag_rect->set_x0 (std::min(x0, x1));
 	_drag_rect->set_x1 (std::max(x0, x1));
 }
@@ -6851,21 +6888,17 @@ void
 NoteCreateDrag::finished (GdkEvent* ev, bool had_movement)
 {
 	/* we create a note even if there was no movement */
-	samplepos_t const start = min (_note[0], _note[1]);
-	samplepos_t const start_sess_rel = start + _region_view->region()->position();
-	samplecnt_t length = max (_editor->pixel_to_sample (1.0), (samplecnt_t) fabs ((double)(_note[0] - _note[1])));
-	samplecnt_t const g = grid_samples (start_sess_rel);
+	Beats const start = (min (_note[0], _note[1])).beats ();
+	Beats length = max (Beats (1, 0), (_note[1].distance (_note[0]).abs().beats()));
 
-	if (_editor->get_grid_music_divisions (ev->button.state) != 0 && length < g) {
-		length = g;
+	int32_t div = _editor->get_grid_music_divisions (ev->button.state);
+
+	if (div > 0) {
+		length = length.round_to_subdivision (div, RoundUpMaybe);
 	}
 
-	TempoMap& map (_editor->session()->tempo_map());
-	const double qn_length = map.quarter_notes_between_samples (start_sess_rel, start_sess_rel + length);
-	Temporal::Beats qn_length_beats = max (Temporal::Beats::ticks(1), Temporal::Beats (qn_length));
-
 	_editor->begin_reversible_command (_("Create Note"));
-	_region_view->create_note_at (start, _drag_rect->y0(), qn_length_beats, ev->button.state, false);
+	_region_view->create_note_at (start, _drag_rect->y0(), length, ev->button.state, false);
 	_editor->commit_reversible_command ();
 }
 
@@ -6900,23 +6933,21 @@ HitCreateDrag::start_grab (GdkEvent* event, Gdk::Cursor* cursor)
 {
 	Drag::start_grab (event, cursor);
 
-	TempoMap& map (_editor->session()->tempo_map());
-
 	_y = _region_view->note_to_y (_region_view->y_to_note (y_to_region (event->button.y)));
 
-	const samplepos_t pf = _drags->current_pointer_sample ();
+	const timepos_t pos = _drags->current_pointer_time ();
 	const int32_t divisions = _editor->get_grid_music_divisions (event->button.state);
 
-	const double eqaf = map.exact_qn_at_sample (pf, divisions);
+	const Beats beats = pos.beats ();
 
 	boost::shared_ptr<MidiRegion> mr = _region_view->midi_region();
 
-	if (eqaf >= mr->quarter_note() + mr->length_beats()) {
+	if (beats >= mr->nt_last().beats()) {
 		return;
 	}
 
-	const samplepos_t start = map.sample_at_quarter_note (eqaf) - _region_view->region()->position();
-	Temporal::Beats length = Temporal::Beats::from_double (1.0 / 32.0); /* 1/32 beat = 1/128 note */
+	const Temporal::Beats start = beats - _region_view->region()->nt_position().beats ();
+	Temporal::Beats length = _region_view->get_grid_beats (pos);
 
 	_editor->begin_reversible_command (_("Create Hit"));
 	_region_view->clear_note_selection();
@@ -6928,27 +6959,25 @@ HitCreateDrag::start_grab (GdkEvent* event, Gdk::Cursor* cursor)
 void
 HitCreateDrag::motion (GdkEvent* event, bool)
 {
-	TempoMap& map (_editor->session()->tempo_map());
-
-	const samplepos_t pf = _drags->current_pointer_sample ();
+	const timepos_t pos = _drags->current_pointer_time ();
 	const int32_t divisions = _editor->get_grid_music_divisions (event->button.state);
 
 	if (divisions == 0) {
 		return;
 	}
 
-	const double eqaf = map.exact_qn_at_sample (pf, divisions);
-	const samplepos_t start = map.sample_at_quarter_note (eqaf) - _region_view->region()->position ();
+	const Beats beats = pos.beats ();
+	const Temporal::Beats start = beats - _region_view->region()->nt_position ().beats();
 
 	if (_last_pos == start) {
 		return;
 	}
 
-	Temporal::Beats length = _region_view->get_grid_beats (pf);
+	Temporal::Beats length = _region_view->get_grid_beats (pos);
 
 	boost::shared_ptr<MidiRegion> mr = _region_view->midi_region();
 
-	if (eqaf >= mr->quarter_note() + mr->length_beats()) {
+	if (beats > mr->nt_last().beats()) {
 		return;
 	}
 
@@ -6996,31 +7025,31 @@ void
 CrossfadeEdgeDrag::motion (GdkEvent*, bool)
 {
 	double distance;
-	double new_length;
-	samplecnt_t len;
+	timecnt_t new_length;
+	timecnt_t len;
 
 	boost::shared_ptr<AudioRegion> ar (arv->audio_region());
 
 	if (start) {
 		distance = _drags->current_pointer_x() - grab_x();
-		len = ar->fade_in()->back()->when;
+		len = timecnt_t (ar->fade_in()->back()->when);
 	} else {
 		distance = grab_x() - _drags->current_pointer_x();
-		len = ar->fade_out()->back()->when;
+		len = timecnt_t (ar->fade_out()->back()->when);
 	}
 
 	/* how long should it be ? */
 
-	new_length = len + _editor->pixel_to_sample (distance);
+	new_length = len + timecnt_t (_editor->pixel_to_sample (distance));
 
 	/* now check with the region that this is legal */
 
-	new_length = ar->verify_xfade_bounds (new_length, start);
+	new_length = ar->verify_xfade_bounds (new_length.samples(), start);
 
 	if (start) {
-		arv->reset_fade_in_shape_width (ar, new_length);
+		arv->reset_fade_in_shape_width (ar, new_length.samples());
 	} else {
-		arv->reset_fade_out_shape_width (ar, new_length);
+		arv->reset_fade_out_shape_width (ar, new_length.samples());
 	}
 }
 
@@ -7028,28 +7057,28 @@ void
 CrossfadeEdgeDrag::finished (GdkEvent*, bool)
 {
 	double distance;
-	double new_length;
-	samplecnt_t len;
+	timecnt_t new_length;
+	timecnt_t len;
 
 	boost::shared_ptr<AudioRegion> ar (arv->audio_region());
 
 	if (start) {
 		distance = _drags->current_pointer_x() - grab_x();
-		len = ar->fade_in()->back()->when;
+		len = timecnt_t (ar->fade_in()->back()->when);
 	} else {
 		distance = grab_x() - _drags->current_pointer_x();
-		len = ar->fade_out()->back()->when;
+		len = timecnt_t (ar->fade_out()->back()->when);
 	}
 
-	new_length = ar->verify_xfade_bounds (len + _editor->pixel_to_sample (distance), start);
+	new_length = ar->verify_xfade_bounds ((len + timecnt_t (_editor->pixel_to_sample (distance))).samples(), start);
 
 	_editor->begin_reversible_command ("xfade trim");
 	ar->playlist()->clear_owned_changes ();
 
 	if (start) {
-		ar->set_fade_in_length (new_length);
+		ar->set_fade_in_length (new_length.samples());
 	} else {
-		ar->set_fade_out_length (new_length);
+		ar->set_fade_out_length (new_length.samples());
 	}
 
 	/* Adjusting the xfade may affect other regions in the playlist, so we need
@@ -7101,10 +7130,10 @@ RegionCutDrag::finished (GdkEvent* event, bool)
 	_editor->get_track_canvas()->canvas()->re_enter();
 
 
-	MusicSample pos (_drags->current_pointer_sample(), 0);
+	timepos_t pos (_drags->current_pointer_time());
 	_editor->snap_to_with_modifier (pos, event);
 
-	RegionSelection rs = _editor->get_regions_from_selection_and_mouse (pos.sample);
+	RegionSelection rs = _editor->get_regions_from_selection_and_mouse (pos);
 
 	if (rs.empty()) {
 		return;
