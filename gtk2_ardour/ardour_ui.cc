@@ -225,7 +225,7 @@ using namespace Editing;
 
 ARDOUR_UI *ARDOUR_UI::theArdourUI = 0;
 
-sigc::signal<void, samplepos_t> ARDOUR_UI::Clock;
+sigc::signal<void, timepos_t> ARDOUR_UI::Clock;
 sigc::signal<void> ARDOUR_UI::CloseAllDialogs;
 
 static bool
@@ -2171,7 +2171,7 @@ void
 ARDOUR_UI::primary_clock_value_changed ()
 {
 	if (_session) {
-		_session->request_locate (primary_clock->current_time ());
+		_session->request_locate (primary_clock->current_time ().samples());
 	}
 }
 
@@ -2179,7 +2179,7 @@ void
 ARDOUR_UI::big_clock_value_changed ()
 {
 	if (_session) {
-		_session->request_locate (big_clock->current_time ());
+		_session->request_locate (big_clock->current_time ().samples());
 	}
 }
 
@@ -2187,7 +2187,7 @@ void
 ARDOUR_UI::secondary_clock_value_changed ()
 {
 	if (_session) {
-		_session->request_locate (secondary_clock->current_time ());
+		_session->request_locate (secondary_clock->current_time ().samples());
 	}
 }
 void
@@ -2619,7 +2619,7 @@ ARDOUR_UI::cleanup_peakfiles ()
 	RegionSelection rs;
 	TrackViewList empty;
 	empty.clear();
-	editor->get_regions_after(rs, (samplepos_t) 0, empty);
+	editor->get_regions_after(rs, timepos_t (), empty);
 	std::list<RegionView*> views = rs.by_layer();
 
 	// remove displayed audio-region-views waveforms

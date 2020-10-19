@@ -290,7 +290,7 @@ public:
 	void invert_selection_in_track ();
 	void invert_selection ();
 	void deselect_all ();
-	long select_range (samplepos_t, samplepos_t);
+	long select_range (Temporal::timepos_t const & , Temporal::timepos_t const &);
 
 	void set_selected_regionview_from_region_list (boost::shared_ptr<ARDOUR::Region> region, Selection::Operation op = Selection::Set);
 
@@ -1275,8 +1275,8 @@ private:
 	void remove_region_sync();
 	void align_regions (ARDOUR::RegionPoint);
 	void align_regions_relative (ARDOUR::RegionPoint point);
-	void align_region (boost::shared_ptr<ARDOUR::Region>, ARDOUR::RegionPoint point, samplepos_t position);
-	void align_region_internal (boost::shared_ptr<ARDOUR::Region>, ARDOUR::RegionPoint point, samplepos_t position);
+	void align_region (boost::shared_ptr<ARDOUR::Region>, ARDOUR::RegionPoint point, Temporal::timepos_t const & position);
+	void align_region_internal (boost::shared_ptr<ARDOUR::Region>, ARDOUR::RegionPoint point, Temporal::timepos_t const & position);
 	void recover_regions (ARDOUR::RegionList);
 	void remove_selected_regions ();
 	void remove_clicked_region ();
@@ -1380,7 +1380,7 @@ private:
 	                     Editing::ImportDisposition            disposition,
 	                     Editing::ImportMode                   mode,
 	                     ARDOUR::SrcQuality                    quality,
-	                     samplepos_t&                          pos,
+	                     Temporal::timepos_t&                  pos,
 	                     int                                   target_regions,
 	                     int                                   target_tracks,
 	                     boost::shared_ptr<ARDOUR::Track>&     track,
@@ -1392,7 +1392,7 @@ private:
 	                    bool&                                 check_sample_rate,
 	                    Editing::ImportDisposition            disposition,
 	                    Editing::ImportMode                   mode,
-	                    samplepos_t&                          pos,
+	                    Temporal::timepos_t&                  pos,
 	                    int                                   target_regions,
 	                    int                                   target_tracks,
 	                    boost::shared_ptr<ARDOUR::Track>&     track,
@@ -1400,7 +1400,7 @@ private:
 
 	int add_sources (std::vector<std::string>              paths,
 	                 ARDOUR::SourceList&                   sources,
-	                 samplepos_t&                          pos,
+	                 Temporal::timepos_t&                  pos,
 	                 Editing::ImportDisposition            disposition,
 	                 Editing::ImportMode                   mode,
 	                 int                                   target_regions,
@@ -1412,7 +1412,7 @@ private:
 	int finish_bringing_in_material (boost::shared_ptr<ARDOUR::Region>     region,
 	                                 uint32_t                              in_chans,
 	                                 uint32_t                              out_chans,
-	                                 samplepos_t&                          pos,
+	                                 Temporal::timepos_t&                  pos,
 	                                 Editing::ImportMode                   mode,
 	                                 boost::shared_ptr<ARDOUR::Track>&     existing_track,
 	                                 const std::string&                    new_track_name,
@@ -1447,7 +1447,7 @@ private:
 		}
 
 		Editing::ImportMode mode;
-		samplepos_t pos;
+		Temporal::timepos_t pos;
 		int target_tracks;
 		int target_regions;
 		boost::shared_ptr<ARDOUR::Track> track;
@@ -1463,7 +1463,7 @@ private:
 
 	void import_audio (bool as_tracks);
 	void do_import (std::vector<std::string> paths, bool split, bool as_tracks);
-	void import_smf_tempo_map (Evoral::SMF const &, samplepos_t pos);
+	void import_smf_tempo_map (Evoral::SMF const &, Temporal::timepos_t const & pos);
 	void move_to_start ();
 	void move_to_end ();
 	void center_playhead ();
@@ -2201,7 +2201,7 @@ private:
 
 	void selected_marker_moved (ARDOUR::Location*);
 
-	bool get_edit_op_range (Temporal::timepos_t& start, samplepos_t& end) const;
+	bool get_edit_op_range (Temporal::timepos_t& start, Temporal::timepos_t& end) const;
 
 	void get_regions_at (RegionSelection&, Temporal::timepos_t const & where, const TrackViewList& ts) const;
 	void get_regions_after (RegionSelection&, Temporal::timepos_t const & where, const TrackViewList& ts) const;

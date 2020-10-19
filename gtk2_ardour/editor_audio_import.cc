@@ -267,7 +267,7 @@ Editor::get_nth_selected_midi_track (int nth) const
 }
 
 void
-Editor::import_smf_tempo_map (Evoral::SMF const & smf, samplepos_t pos)
+Editor::import_smf_tempo_map (Evoral::SMF const & smf, timepos_t const & pos)
 {
 	if (!_session) {
 		return;
@@ -301,8 +301,9 @@ Editor::import_smf_tempo_map (Evoral::SMF const & smf, samplepos_t pos)
 			}
 
 		} else {
-			new_map.replace_meter (new_map.meter_section_at_sample (0), meter, bbt, pos, AudioTime);
-			new_map.replace_tempo (new_map.tempo_section_at_sample (0), tempo, 0.0, pos, AudioTime);
+#warning NUTEMPO needs new tempo map API
+			//new_map.replace_meter (new_map.meter_section_at_sample (0), meter, bbt, pos, AudioTime);
+			//new_map.replace_tempo (new_map.tempo_section_at_sample (0), tempo, 0.0, pos, AudioTime);
 			have_initial_meter = true;
 
 		}
@@ -533,7 +534,7 @@ Editor::import_sndfiles (vector<string>            paths,
                          ImportDisposition         disposition,
                          ImportMode                mode,
                          SrcQuality                quality,
-                         samplepos_t&              pos,
+                         timepos_t&                pos,
                          int                       target_regions,
                          int                       target_tracks,
                          boost::shared_ptr<Track>& track,
@@ -605,7 +606,7 @@ Editor::embed_sndfiles (vector<string>            paths,
                         bool&                     check_sample_rate,
                         ImportDisposition         disposition,
                         ImportMode                mode,
-                        samplepos_t&              pos,
+                        timepos_t&              pos,
                         int                       target_regions,
                         int                       target_tracks,
                         boost::shared_ptr<Track>& track,
@@ -734,7 +735,7 @@ Editor::embed_sndfiles (vector<string>            paths,
 int
 Editor::add_sources (vector<string>            paths,
                      SourceList&               sources,
-                     samplepos_t&              pos,
+                     timepos_t&              pos,
                      ImportDisposition         disposition,
                      ImportMode                mode,
                      int                       target_regions,
@@ -772,7 +773,7 @@ Editor::add_sources (vector<string>            paths,
 		PropertyList plist;
 
 		plist.add (ARDOUR::Properties::start, 0);
-		plist.add (ARDOUR::Properties::length, sources[0]->length (pos));
+		plist.add (ARDOUR::Properties::length, sources[0]->length ());
 		plist.add (ARDOUR::Properties::name, region_name);
 		plist.add (ARDOUR::Properties::layer, 0);
 		plist.add (ARDOUR::Properties::whole_file, true);
@@ -855,9 +856,9 @@ Editor::add_sources (vector<string>            paths,
 			   is a MIDI region the conversion from samples -> beats -> samples will
 			   round it back down to 0 again.
 			*/
-			samplecnt_t len = (*x)->length (pos);
+			timecnt_t len = (*x)->length ();
 			if (len == 0) {
-				len = (60.0 / 120.0) * _session->sample_rate ();
+				len = timecnt_t (_session->sample_rate ()) / 2;
 			}
 
 			plist.add (ARDOUR::Properties::start, 0);
@@ -878,7 +879,7 @@ Editor::add_sources (vector<string>            paths,
 	}
 
 	if (target_regions == 1) {
-		input_chan = regions.front()->n_channels();
+		input_chan = regions.front()->sources().size();
 	} else {
 		if (target_tracks == 1) {
 			input_chan = regions.size();
@@ -894,7 +895,7 @@ Editor::add_sources (vector<string>            paths,
 	}
 
 	int n = 0;
-	samplepos_t rlen = 0;
+	timecnt_t rlen;
 
 	begin_reversible_command (Operations::insert_file);
 
@@ -938,14 +939,14 @@ Editor::add_sources (vector<string>            paths,
 
 		finish_bringing_in_material (*r, input_chan, output_chan, pos, mode, track, track_names[n], instrument);
 
-		rlen = (*r)->length();
+		rlen = (*r)->nt_length();
 
 		if (target_tracks != 1) {
 			track.reset ();
 		} else {
 			if (!use_timestamp || !ar) {
 				/* line each one up right after the other */
-				pos += (*r)->length();
+				pos += (*r)->nt_length();
 			}
 		}
 	}
@@ -965,7 +966,7 @@ int
 Editor::finish_bringing_in_material (boost::shared_ptr<Region> region,
                                      uint32_t                  in_chans,
                                      uint32_t                  out_chans,
-                                     samplepos_t&               pos,
+                                     timepos_t&               pos,
                                      ImportMode                mode,
                                      boost::shared_ptr<Track>& existing_track,
                                      const string&             new_track_name,
@@ -998,8 +999,9 @@ Editor::finish_bringing_in_material (boost::shared_ptr<Region> region,
 		boost::shared_ptr<Region> copy (RegionFactory::create (region, region->properties()));
 		playlist->clear_changes ();
 		playlist->add_region (copy, pos);
-		if (Config->get_edit_mode() == Ripple)
-			playlist->ripple (pos, copy->length(), copy);
+		if (Config->get_edit_mode() == Ripple) {
+			playlist->ripple (pos, copy->nt_length(), copy);
+		}
 
 		_session->add_command (new StatefulDiffCommand (playlist));
 		break;
