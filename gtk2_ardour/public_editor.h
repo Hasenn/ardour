@@ -508,8 +508,8 @@ public:
 
 	virtual void mouse_add_new_tempo_event (Temporal::timepos_t where) = 0;
 	virtual void mouse_add_new_meter_event (Temporal::timepos_t where) = 0;
-	virtual void edit_tempo_section (ARDOUR::TempoSection*) = 0;
-	virtual void edit_meter_section (ARDOUR::MeterSection*) = 0;
+	virtual void edit_tempo_section (Temporal::TempoPoint*) = 0;
+	virtual void edit_meter_section (Temporal::MeterPoint*) = 0;
 
 	/// Singleton instance, set up by Editor::Editor()
 

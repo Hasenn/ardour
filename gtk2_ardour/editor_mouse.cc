@@ -92,6 +92,8 @@ using namespace ARDOUR;
 using namespace PBD;
 using namespace Gtk;
 using namespace Editing;
+using namespace Temporal;
+
 using Gtkmm2ext::Keyboard;
 
 bool
@@ -1921,7 +1923,7 @@ Editor::enter_handler (ArdourCanvas::Item* item, GdkEvent* event, ItemType item_
 			break;
 		}
 		entered_marker = m_marker;
-		if (m_marker->meter().position_lock_style() == MusicTime) {
+		if (m_marker->meter().map().time_domain() == BeatTime) {
 			m_marker->set_color_rgba (UIConfiguration::instance().color ("meter marker"));
 		} else {
 			m_marker->set_color_rgba (UIConfiguration::instance().color ("meter marker music"));
@@ -1933,7 +1935,7 @@ Editor::enter_handler (ArdourCanvas::Item* item, GdkEvent* event, ItemType item_
 			break;
 		}
 		entered_marker = t_marker;
-		if (t_marker->tempo().position_lock_style() == MusicTime) {
+		if (t_marker->tempo().map().time_domain() == BeatTime) {
 			t_marker->set_color_rgba (UIConfiguration::instance().color ("tempo marker"));
 		} else {
 			t_marker->set_color_rgba (UIConfiguration::instance().color ("tempo marker music"));
@@ -2053,7 +2055,7 @@ Editor::leave_handler (ArdourCanvas::Item* item, GdkEvent*, ItemType item_type)
 			break;
 		}
 		entered_marker = 0;
-		if (m_marker->meter().position_lock_style() == MusicTime) {
+		if (m_marker->meter().map().time_domain() == BeatTime) {
 			m_marker->set_color_rgba (UIConfiguration::instance().color ("meter marker music"));
 		} else {
 			m_marker->set_color_rgba (UIConfiguration::instance().color ("meter marker"));
@@ -2065,7 +2067,7 @@ Editor::leave_handler (ArdourCanvas::Item* item, GdkEvent*, ItemType item_type)
 			break;
 		}
 		entered_marker = 0;
-		if (t_marker->tempo().position_lock_style() == MusicTime) {
+		if (t_marker->tempo().map().time_domain() == BeatTime) {
 			t_marker->set_color_rgba (UIConfiguration::instance().color ("tempo marker music"));
 		} else {
 			t_marker->set_color_rgba (UIConfiguration::instance().color ("tempo marker"));
