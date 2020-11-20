@@ -1724,6 +1724,9 @@ LuaBindings::common (lua_State* L)
 		.beginStdList <boost::shared_ptr<AudioTrack> > ("AudioTrackList")
 		.endClass ()
 
+		.beginStdList <TimelineRange> ("TimelineRangeList")
+		.endClass ()
+
 		// std::list<boost::shared_ptr <MidiTrack> >
 		.beginStdList <boost::shared_ptr<MidiTrack> > ("MidiTrackList")
 		.endClass ()
