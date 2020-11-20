@@ -138,6 +138,8 @@ private:
 	/* engine / thread connection */
 	PBD::ScopedConnectionList engine_connections;
 	void                      engine_stopped ();
+
+	void setup_thread_local_variables ();
 };
 
 } // namespace
