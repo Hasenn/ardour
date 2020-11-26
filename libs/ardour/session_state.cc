@@ -154,6 +154,7 @@
 using namespace std;
 using namespace ARDOUR;
 using namespace PBD;
+using namespace Temporal;
 
 #define DEBUG_UNDO_HISTORY(msg) DEBUG_TRACE (PBD::DEBUG::UndoHistory, string_compose ("%1: %2\n", __LINE__, msg));
 
@@ -1514,7 +1515,7 @@ Session::state (bool save_template, snapshot_t snapshot_type, bool only_used_ass
 	}
 
 	node->add_child_nocopy (_speakers->get_state());
-	node->add_child_nocopy (_tempo_map->get_state());
+	node->add_child_nocopy (TempoMap::fetch()->get_state());
 	node->add_child_nocopy (get_control_protocol_state());
 
 	if (_extra_xml) {
@@ -1656,8 +1657,13 @@ Session::set_state (const XMLNode& node, int version)
 	if ((child = find_named_node (node, "TempoMap")) == 0) {
 		error << _("Session: XML state has no Tempo Map section") << endmsg;
 		goto out;
-	} else if (_tempo_map->set_state (*child, version)) {
-		goto out;
+	} else {
+		try {
+			TempoMap::SharedPtr new_map (new TempoMap (*child, version));
+			TempoMap::update (new_map);
+		} catch (...) {
+			goto out;
+		}
 	}
 
 	if ((child = find_named_node (node, "Locations")) == 0) {
