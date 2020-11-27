@@ -7104,8 +7104,7 @@ Editor::define_one_bar (timepos_t const & start, timepos_t const & end)
 
 	XMLNode& after (tmap->get_state());
 
-#warning NUTEMPO memento command tempo map issues
-	// _session->add_command (new MementoCommand<TempoMap>(_session->tempo_map(), &before, &after));
+	_session->add_command (new MementoCommand<Temporal::TempoMap> (new Temporal::TempoMap::MementoBinder(), &before, &after));
 	commit_reversible_command ();
 }
 
@@ -8044,8 +8043,7 @@ Editor::insert_time (
 		XMLNode& before (tmap->get_state());
 		tmap->insert_time (pos, samples);
 		XMLNode& after (tmap->get_state());
-#warning NUTEMPO memento command tempo map issues
-		// _session->add_command (new MementoCommand<TempoMap>(_session->tempo_map(), &before, &after));
+		_session->add_command (new MementoCommand<Temporal::TempoMap> (new Temporal::TempoMap::MementoBinder(), &before, &after));
 	}
 
 	if (in_command) {
@@ -8225,8 +8223,7 @@ Editor::remove_time (timepos_t const & pos, timecnt_t const & duration, InsertTi
 				in_command = true;
 			}
 			XMLNode& after (tmap->get_state());
-#warning NUTEMPO memento command tempo map issue
-			//_session->add_command (new MementoCommand<TempoMap>(_session->tempo_map(), &before, &after));
+			_session->add_command (new MementoCommand<Temporal::TempoMap> (new Temporal::TempoMap::MementoBinder(), &before, &after));
 		}
 	}
 
