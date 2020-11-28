@@ -42,6 +42,9 @@
 #include "pbd/stacktrace.h"
 #include "pbd/unknown_type.h"
 
+#include "temporal/superclock.h"
+#include "temporal/tempo.h"
+
 #include "midi++/port.h"
 #include "midi++/mmc.h"
 
@@ -1400,6 +1403,9 @@ AudioEngine::thread_init_callback (void* arg)
 	SessionEvent::create_per_thread_pool (thread_name, 512);
 	PBD::notify_event_loops_about_thread_creation (pthread_self(), thread_name, 4096);
 	AsyncMIDIPort::set_process_thread (pthread_self());
+
+	Temporal::_thread_sample_rate = 44100; /* will change later as appropriate */
+	Temporal::TempoMap::fetch ();
 
 	if (arg) {
 		delete AudioEngine::instance()->_main_thread;
