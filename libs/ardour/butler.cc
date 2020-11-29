@@ -32,6 +32,7 @@
 #include "pbd/pthread_utils.h"
 
 #include "temporal/superclock.h"
+#include "temporal/tempo.h"
 
 #include "ardour/butler.h"
 #include "ardour/debug.h"
@@ -198,6 +199,7 @@ Butler::thread_work ()
 		}
 
 		Temporal::_thread_sample_rate = _session.sample_rate ();
+		Temporal::TempoMap::fetch ();
 
 	  restart:
 		DEBUG_TRACE (DEBUG::Butler, "at restart for disk work\n");
