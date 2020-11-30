@@ -186,7 +186,7 @@ RegionSelection::add_to_layer (RegionView * rv)
 
 struct RegionSortByTime {
 	bool operator() (const RegionView* a, const RegionView* b) const {
-		return a->region()->nt_position() < b->region()->nt_position();
+		return a->region()->position() < b->region()->position();
 	}
 };
 
@@ -215,7 +215,7 @@ struct RegionSortByTrack {
 		/* really, track and position */
 
 		if (a->get_time_axis_view().order() == b->get_time_axis_view().order()) {
-			return a->region()->nt_position() < b->region()->nt_position();
+			return a->region()->position() < b->region()->position();
 		} else {
 			return a->get_time_axis_view().order() < b->get_time_axis_view().order();
 		}
@@ -273,13 +273,13 @@ RegionSelection::start_time () const
 		return timepos_t ();
 	}
 
-	timepos_t s = timepos_t::max (front()->region()->nt_position().time_domain());
+	timepos_t s = timepos_t::max (front()->region()->position().time_domain());
 
 	for (RegionSelection::const_iterator i = begin(); i != end(); ++i) {
-		s = min (s, (*i)->region()->nt_position ());
+		s = min (s, (*i)->region()->position ());
 	}
 
-	if (s == timepos_t::max (front()->region()->nt_position().time_domain())) {
+	if (s == timepos_t::max (front()->region()->position().time_domain())) {
 	    return timepos_t ();
 	}
 
@@ -293,10 +293,10 @@ RegionSelection::end_time () const
 		return timepos_t ();
 	}
 
-	timepos_t e (timepos_t::zero (front()->region()->nt_position().time_domain()));
+	timepos_t e (timepos_t::zero (front()->region()->position().time_domain()));
 
 	for (RegionSelection::const_iterator i = begin(); i != end(); ++i) {
-		e = max (e, (*i)->region()->nt_end ());
+		e = max (e, (*i)->region()->end ());
 	}
 
 	return e;
