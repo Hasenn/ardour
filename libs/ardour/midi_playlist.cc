@@ -153,9 +153,9 @@ MidiPlaylist::dump () const
 	for (RegionList::const_iterator i = regions.begin(); i != regions.end(); ++i) {
 		r = *i;
 		cerr << "  " << r->name() << " @ " << r << " ["
-		<< r->nt_start() << "+" << r->nt_length()
+		<< r->start() << "+" << r->length()
 		<< "] at "
-		<< r->nt_position()
+		<< r->position()
 		<< " on layer "
 		<< r->layer ()
 		<< endl;
@@ -206,7 +206,7 @@ MidiPlaylist::_split_region (boost::shared_ptr<Region> region, timepos_t const &
 		return;
 	}
 
-	if (region->nt_position() == playlist_position ||
+	if (region->position() == playlist_position ||
 	    region->nt_last() == playlist_position) {
 		return;
 	}
@@ -223,8 +223,8 @@ MidiPlaylist::_split_region (boost::shared_ptr<Region> region, timepos_t const &
 	string before_name;
 	string after_name;
 
-	const timecnt_t before = region->nt_position().distance (playlist_position);
-	const timecnt_t after = region->nt_length() - before;
+	const timecnt_t before = region->position().distance (playlist_position);
+	const timecnt_t after = region->length() - before;
 
 	/* split doesn't change anything about length, so don't try to splice */
 	bool old_sp = _splicing;
@@ -263,8 +263,8 @@ MidiPlaylist::_split_region (boost::shared_ptr<Region> region, timepos_t const &
 		right = RegionFactory::create (region, before, plist, true);
 	}
 
-	add_region_internal (left, region->nt_position(), thawlist);
-	add_region_internal (right, region->nt_position() + before, thawlist);
+	add_region_internal (left, region->position(), thawlist);
+	add_region_internal (right, region->position() + before, thawlist);
 
 	remove_region_internal (region, thawlist);
 
