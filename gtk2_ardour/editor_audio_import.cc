@@ -328,7 +328,7 @@ Editor::do_import (vector<string>          paths,
 	boost::shared_ptr<Track> track;
 	vector<string> to_import;
 	int nth = 0;
-	bool use_timestamp = (pos == -1);
+	bool use_timestamp = (pos == timepos_t::max (pos.time_domain()));
 
 	if (smf_tempo_disposition == SMFTempoUse) {
 		/* Find the first MIDI file with a tempo map, and import it
@@ -405,7 +405,7 @@ Editor::do_import (vector<string>          paths,
 			/* have to reset this for every file we handle */
 
 			if (use_timestamp) {
-				pos = -1;
+				pos = timepos_t::max (pos.time_domain());
 			}
 
 			ipw.show ();
@@ -460,7 +460,7 @@ Editor::do_embed (vector<string> paths, ImportDisposition import_as, ImportMode 
 	vector<string> to_embed;
 	bool multi = paths.size() > 1;
 	int nth = 0;
-	bool use_timestamp = (pos == -1);
+	bool use_timestamp = (pos == timepos_t::max (pos.time_domain()));
 
 	switch (import_as) {
 	case Editing::ImportDistinctFiles:
@@ -468,7 +468,7 @@ Editor::do_embed (vector<string> paths, ImportDisposition import_as, ImportMode 
 
 			/* have to reset this for every file we handle */
 			if (use_timestamp) {
-				pos = -1;
+				pos = timepos_t::max (pos.time_domain());
 			}
 
 			to_embed.clear ();
@@ -490,7 +490,7 @@ Editor::do_embed (vector<string> paths, ImportDisposition import_as, ImportMode 
 
 			/* have to reset this for every file we handle */
 			if (use_timestamp) {
-				pos = -1;
+				pos = timepos_t::max (pos.time_domain());
 			}
 
 			to_embed.clear ();
@@ -515,7 +515,7 @@ Editor::do_embed (vector<string> paths, ImportDisposition import_as, ImportMode 
 
 			/* have to reset this for every file we handle */
 			if (use_timestamp) {
-				pos = -1;
+				pos = timepos_t::max (pos.time_domain());
 			}
 
 			to_embed.clear ();
@@ -752,7 +752,7 @@ Editor::add_sources (vector<string>            paths,
 	bool use_timestamp;
 	vector<string> track_names;
 
-	use_timestamp = (pos == -1);
+	use_timestamp = (pos == timepos_t::max (pos.time_domain()));
 
 	// kludge (for MIDI we're abusing "channel" for "track" here)
 	if (SMFSource::safe_midi_file_extension (paths.front())) {
