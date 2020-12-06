@@ -1305,7 +1305,9 @@ AudioClock::set_bbt (timepos_t const & w, timecnt_t const & o, bool /*force*/)
 		} else if (m.tempo().note_type() == 8) {
 			snprintf (buf, sizeof(buf), "\u266a = %.3f", m.tempo().note_types_per_minute());
 			_left_btn.set_text (string_compose ("%1", buf), false);
-		} else {
+		} else
+#endif
+		{
 			snprintf (buf, sizeof(buf), "1/%d = %.3f", m.tempo().note_type(), m.tempo().note_types_per_minute());
 			_left_btn.set_text (string_compose ("%1: %2", S_("Tempo|T"), buf), false);
 		}
