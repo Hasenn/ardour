@@ -1075,7 +1075,6 @@ Editor::_import_thread (void *arg)
 void *
 Editor::import_thread ()
 {
-	Temporal::set_thread_sample_rate (_session->sample_rate());
 	Temporal::TempoMap::fetch ();
 
 	_session->import_files (import_status);
