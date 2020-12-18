@@ -3135,17 +3135,15 @@ Playlist::combine (const RegionList& r)
 
 	SourceList sources;
 	pair<timepos_t,timepos_t> extent = pl->get_extent();
+	timepos_t zero (_type == DataType::AUDIO ? Temporal::AudioTime : Temporal::BeatTime);
 
 	for (uint32_t chn = 0; chn < channels; ++chn) {
-#warning NUTEMPO FIXME playlist needs a timedomain or something like that. also what about that extent argument... wrong time domain? then what?
-		sources.push_back (SourceFactory::createFromPlaylist (_type, _session, pl, id(), parent_name, chn, timepos_t (Temporal::AudioTime), extent.second, false, false));
-
+		sources.push_back (SourceFactory::createFromPlaylist (_type, _session, pl, id(), parent_name, chn, zero, extent.second, false, false));
 	}
 
 	/* now a new whole-file region using the list of sources */
 
-#warning NUTEMPO FIXME playlist needs a timedomain or something like that
-	plist.add (Properties::start, timecnt_t (0, timepos_t (Temporal::AudioTime)));
+	plist.add (Properties::start, timecnt_t (0, zero));
 	plist.add (Properties::length, timecnt_t  (extent.second, extent.first));
 	plist.add (Properties::name, parent_name);
 	plist.add (Properties::whole_file, true);
@@ -3155,7 +3153,7 @@ Playlist::combine (const RegionList& r)
 	/* now the non-whole-file region that we will actually use in the playlist */
 
 	plist.clear ();
-	plist.add (Properties::start, 0);
+	plist.add (Properties::start, zero);
 	plist.add (Properties::length, extent.second);
 	plist.add (Properties::name, child_name);
 	plist.add (Properties::layer, layer+1);
