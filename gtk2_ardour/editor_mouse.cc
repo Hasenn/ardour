@@ -2221,7 +2221,7 @@ Editor::motion_handler (ArdourCanvas::Item* /*item*/, GdkEvent* event, bool from
 	} else {
 		bool ignored;
 		bool peaks_visible = false;
-		sanplepos_t where;
+		samplepos_t where;
 		if (mouse_sample (where, ignored)) {
 
 			/* display peaks */
@@ -2236,7 +2236,7 @@ Editor::motion_handler (ArdourCanvas::Item* /*item*/, GdkEvent* event, bool from
 			/* the snapped_cursor shows where an operation (like Split) is going to occur */
 			timepos_t t (where);
 			snap_to_with_modifier (t, event);
-			set_snapped_cursor_position (t.sample);
+			set_snapped_cursor_position (t);
 		}
 
 		if (!peaks_visible) {
