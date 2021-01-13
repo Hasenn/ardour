@@ -1743,7 +1743,7 @@ PluginPinWidget::add_send_from (boost::weak_ptr<ARDOUR::Port> wp, boost::weak_pt
 		return;
 	}
 
-	boost::shared_ptr<Pannable> sendpan (new Pannable (*_session));
+	boost::shared_ptr<Pannable> sendpan (new Pannable (*_session, Config->get_default_automation_time_domain()));
 	boost::shared_ptr<Send> send (new Send (*_session, r->pannable (), r->mute_master ()));
 	const ChanCount& outs (r->amp ()->input_streams ());
 	try {
