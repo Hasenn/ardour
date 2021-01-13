@@ -108,7 +108,8 @@ ARDOUR::LuaAPI::new_luaproc (Session *s, const string& name)
 		return boost::shared_ptr<Processor> ();
 	}
 
-	return boost::shared_ptr<Processor> (new PluginInsert (*s, p));
+#warning NUTEMPO caller should be able to control time domain
+	return boost::shared_ptr<Processor> (new PluginInsert (*s, Config->get_default_automation_time_domain(), p));
 }
 
 PluginInfoList
@@ -197,7 +198,8 @@ ARDOUR::LuaAPI::new_plugin (Session *s, const string& name, ARDOUR::PluginType t
 		}
 	}
 
-	return boost::shared_ptr<Processor> (new PluginInsert (*s, p));
+#warning NUTEMPO caller should be able to control time domain
+	return boost::shared_ptr<Processor> (new PluginInsert (*s, Config->get_default_automation_time_domain(), p));
 }
 
 bool
