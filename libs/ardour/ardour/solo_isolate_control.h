@@ -37,7 +37,7 @@ class Muteable;
 class LIBARDOUR_API SoloIsolateControl : public SlavableAutomationControl
 {
   public:
-	SoloIsolateControl (Session& session, std::string const & name, Soloable& soloable, Muteable& m);
+	SoloIsolateControl (Session& session, std::string const & name, Soloable& soloable, Muteable& m, Temporal::TimeDomain);
 
 	double get_value () const;
 
