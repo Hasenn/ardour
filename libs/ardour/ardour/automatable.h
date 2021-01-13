@@ -50,7 +50,7 @@ class AutomationControl;
 class LIBARDOUR_API Automatable : virtual public Evoral::ControlSet, public Slavable
 {
 public:
-	Automatable(Session&);
+	Automatable(Session&, Temporal::TimeDomain);
 	Automatable (const Automatable& other);
 
 	virtual ~Automatable();
@@ -110,6 +110,8 @@ public:
 
 	PBD::Signal0<void> AutomationStateChanged;
 
+	Temporal::TimeDomain time_domain() const { return _time_domain; }
+
 protected:
 	Session& _a_session;
 
@@ -132,6 +134,7 @@ protected:
 
 private:
 	PBD::ScopedConnectionList _control_connections; ///< connections to our controls' signals
+	Temporal::TimeDomain _time_domain;
 };
 
 
