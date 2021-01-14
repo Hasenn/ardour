@@ -758,7 +758,7 @@ Playlist::set_region_ownership ()
 }
 
 bool
-Playlist::add_region_internal (boost::shared_ptr<Region> region, timepos_t const & position, Thawlist& thawlist)
+Playlist::add_region_internal (boost::shared_ptr<Region> region, timepos_t const & position, ThawList& thawlist)
 {
 	if (region->data_type() != _type) {
 		return false;
@@ -1453,7 +1453,7 @@ Playlist::split_region (boost::shared_ptr<Region> region, timepos_t const & play
 }
 
 void
-Playlist::_split_region (boost::shared_ptr<Region> region, timepos_t const &  playlist_position, Thawlist& thawlist)
+Playlist::_split_region (boost::shared_ptr<Region> region, timepos_t const &  playlist_position, ThawList& thawlist)
 {
 	if (!region->covers (playlist_position)) {
 		return;
@@ -1561,7 +1561,7 @@ Playlist::possibly_splice (timepos_t const & at, timecnt_t const & distance, boo
 }
 
 void
-Playlist::possibly_splice_unlocked (timepos_t const & at, timecnt_t const & distance, boost::shared_ptr<Region> exclude, Thawlist& thawlist)
+Playlist::possibly_splice_unlocked (timepos_t const & at, timecnt_t const & distance, boost::shared_ptr<Region> exclude, ThawList& thawlist)
 {
 	if (_splicing || in_set_state) {
 		/* don't respond to splicing moves or state setting */
@@ -1581,7 +1581,7 @@ Playlist::splice_locked (timepos_t const & at, timecnt_t const & distance, boost
 }
 
 void
-Playlist::splice_unlocked (samplepos_t at, samplecnt_t distance, boost::shared_ptr<Region> exclude, ThawList& thawlist)
+Playlist::splice_unlocked (timepos_t const & at, timecnt_t const & distance, boost::shared_ptr<Region> exclude, ThawList& thawlist)
 {
 	_splicing = true;
 
@@ -1610,14 +1610,14 @@ Playlist::splice_unlocked (samplepos_t at, samplecnt_t distance, boost::shared_p
 }
 
 void
-Playlist::ripple_locked (timepos_t const & at, timecnt_t const & distance, RegionList *exclude, ThawList& thawlist)
+Playlist::ripple_locked (timepos_t const & at, timecnt_t const & distance, RegionList *exclude)
 {
 	RegionWriteLock rl (this);
 	ripple_unlocked (at, distance, exclude, rl.thawlist);
 }
 
 void
-Playlist::ripple_unlocked (samplepos_t at, samplecnt_t distance, RegionList *exclude, ThawList& thawlist)
+Playlist::ripple_unlocked (timepos_t const & at, timecnt_t const & distance, RegionList *exclude, ThawList& thawlist)
 {
 	if (distance.zero()) {
 		return;
