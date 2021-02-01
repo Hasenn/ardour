@@ -3276,6 +3276,7 @@ TrimDrag::setup_pointer_offset ()
 		return;
 	}
 
+
 	switch (_operation) {
 	case StartTrim:
 		_pointer_offset = i->initial_position.distance (raw_grab_time());
@@ -3283,9 +3284,13 @@ TrimDrag::setup_pointer_offset ()
 	case EndTrim:
 		_pointer_offset = i->initial_end.distance (raw_grab_time());
 		break;
-	case ContentsTrim:
-#warning NUTEMPO need to pick time domain here
-		_pointer_offset = timecnt_t ();
+	case ContentsTrim: {
+		/* Use time domain of primary region's track */
+		TimeAxisView& tav (_primary->get_time_axis_view());
+		assert (dynamic_cast<RouteUI*> (&tav));
+		boost::shared_ptr<Route> r (dynamic_cast<RouteUI*> (&tav)->route());
+		_pointer_offset = timecnt_t (r->time_domain());
+		}
 		break;
 	}
 }
