@@ -70,7 +70,7 @@ void ArdourMarker::setup_sizes(const double timebar_height)
 	marker_height = floor (timebar_height) - 2;
 }
 
-ArdourMarker::ArdourMarker (PublicEditor& ed, ArdourCanvas::Container& parent, guint32 rgba, const string& annotation,
+ArdourMarker::ArdourMarker (PublicEditor& ed, ArdourCanvas::Item& parent, guint32 rgba, const string& annotation,
 		Type type, timepos_t const & pos, bool handle_events)
 
 	: editor (ed)
@@ -106,6 +106,7 @@ ArdourMarker::ArdourMarker (PublicEditor& ed, ArdourCanvas::Container& parent, g
 	 *
 	 * TempoMark:
 	 * MeterMark:
+	 * BBTPosition
 	 *
 	 *        (3,0)
 	 *     /         \
@@ -180,6 +181,7 @@ ArdourMarker::ArdourMarker (PublicEditor& ed, ArdourCanvas::Container& parent, g
 
 	case Tempo:
 	case Meter:
+	case BBTPosition:
 		points = new ArdourCanvas::Points ();
 		points->push_back (ArdourCanvas::Duple ( M3, 0.0));
 		points->push_back (ArdourCanvas::Duple ( M6, MH * .6));
@@ -264,7 +266,10 @@ ArdourMarker::ArdourMarker (PublicEditor& ed, ArdourCanvas::Container& parent, g
 
 	_position = pos;
 	unit_position = editor.sample_to_pixel (pos.samples());
+	std::cerr << "1marker @ " << unit_position << " from sample " << pos.samples() << std::endl;
 	unit_position -= _shift;
+
+	std::cerr << "2marker @ " << unit_position << " from sample " << pos.samples() << " shift was " << _shift << std::endl;
 
 	group = new ArdourCanvas::Container (&parent, ArdourCanvas::Duple (unit_position, 1));
 #ifdef CANVAS_DEBUG
@@ -327,7 +332,7 @@ ArdourMarker::~ArdourMarker ()
 	delete points;
 }
 
-void ArdourMarker::reparent(ArdourCanvas::Container & parent)
+void ArdourMarker::reparent(ArdourCanvas::Item & parent)
 {
 	group->reparent (&parent);
 	_parent = &parent;
@@ -562,7 +567,7 @@ ArdourMarker::set_right_label_limit (double p)
 
 /***********************************************************************/
 
-TempoMarker::TempoMarker (PublicEditor& editor, ArdourCanvas::Container& parent, guint32 rgba, const string& text,
+TempoMarker::TempoMarker (PublicEditor& editor, ArdourCanvas::Item& parent, guint32 rgba, const string& text,
                           Temporal::TempoPoint& temp)
 	: ArdourMarker (editor, parent, rgba, text, Tempo, temp.time(), false)
 	, _tempo (temp)
@@ -603,7 +608,7 @@ TempoMarker::reset_tempo (Temporal::TempoPoint & t)
 
 /***********************************************************************/
 
-MeterMarker::MeterMarker (PublicEditor& editor, ArdourCanvas::Container& parent, guint32 rgba, const string& text, Temporal::MeterPoint& m)
+MeterMarker::MeterMarker (PublicEditor& editor, ArdourCanvas::Item& parent, guint32 rgba, const string& text, Temporal::MeterPoint& m)
 	: ArdourMarker (editor, parent, rgba, text, Meter, m.time(), false)
 	, _meter (m)
 {
@@ -622,10 +627,11 @@ MeterMarker::reset_meter (Temporal::MeterPoint & m)
 
 /***********************************************************************/
 
-BBTMarker::BBTMarker (PublicEditor& editor, ArdourCanvas::Container& parent, guint32 rgba, const string& text, Temporal::MusicTimePoint& p)
+BBTMarker::BBTMarker (PublicEditor& editor, ArdourCanvas::Item& parent, guint32 rgba, const string& text, Temporal::MusicTimePoint& p)
 	: ArdourMarker (editor, parent, rgba, text, BBTPosition, p.time(), false)
 	, _point (p)
 {
+	cerr << "NEW BBT MARKER!\n";
 	group->Event.connect (sigc::bind (sigc::mem_fun (editor, &PublicEditor::canvas_bbt_marker_event), group, this));
 }
 

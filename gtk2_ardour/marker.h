@@ -66,7 +66,7 @@ public:
 	};
 
 
-	ArdourMarker (PublicEditor& editor, ArdourCanvas::Container &, guint32 rgba, const std::string& text, Type,
+	ArdourMarker (PublicEditor& editor, ArdourCanvas::Item &, guint32 rgba, const std::string& text, Type,
 	              ARDOUR::timepos_t const & position, bool handle_events = true);
 
 	virtual ~ArdourMarker ();
@@ -89,8 +89,8 @@ public:
 
 	ARDOUR::timepos_t position() const { return _position; }
 
-	ArdourCanvas::Container * get_parent() { return _parent; }
-	void reparent (ArdourCanvas::Container & parent);
+	ArdourCanvas::Item * get_parent() { return _parent; }
+	void reparent (ArdourCanvas::Item & parent);
 
 	void hide ();
 	void show ();
@@ -111,8 +111,8 @@ protected:
 
 	Pango::FontDescription name_font;
 
-	ArdourCanvas::Container* _parent;
-	ArdourCanvas::Container *group;
+	ArdourCanvas::Item* _parent;
+	ArdourCanvas::Item *group;
 	ArdourCanvas::Polygon *mark;
 	ArdourCanvas::Text *_name_item;
 	ArdourCanvas::Points *points;
@@ -148,7 +148,7 @@ private:
 class TempoMarker : public ArdourMarker
 {
   public:
-	TempoMarker (PublicEditor& editor, ArdourCanvas::Container &, guint32 rgba, const std::string& text, Temporal::TempoPoint&);
+	TempoMarker (PublicEditor& editor, ArdourCanvas::Item &, guint32 rgba, const std::string& text, Temporal::TempoPoint&);
 	~TempoMarker ();
 
 	void reset_tempo (Temporal::TempoPoint & t);
@@ -163,7 +163,7 @@ class TempoMarker : public ArdourMarker
 class MeterMarker : public ArdourMarker
 {
   public:
-	MeterMarker (PublicEditor& editor, ArdourCanvas::Container &, guint32 rgba, const std::string& text, Temporal::MeterPoint&);
+	MeterMarker (PublicEditor& editor, ArdourCanvas::Item &, guint32 rgba, const std::string& text, Temporal::MeterPoint&);
 	~MeterMarker ();
 
 	void reset_meter (Temporal::MeterPoint & m);
@@ -177,7 +177,7 @@ class MeterMarker : public ArdourMarker
 class BBTMarker : public ArdourMarker
 {
   public:
-	BBTMarker (PublicEditor& editor, ArdourCanvas::Container &, guint32 rgba, const std::string& text, Temporal::MusicTimePoint&);
+	BBTMarker (PublicEditor& editor, ArdourCanvas::Item &, guint32 rgba, const std::string& text, Temporal::MusicTimePoint&);
 	~BBTMarker ();
 
 	void reset_point (Temporal::MusicTimePoint &);
