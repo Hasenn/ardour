@@ -95,6 +95,7 @@ ArdourMarker::ArdourMarker (PublicEditor& ed, ArdourCanvas::Item& parent, guint3
 	/* Shapes we use:
 	 *
 	 * Mark:
+	 * BBTPosition
 	 *
 	 *  (0,0)   ->  (6,0)
 	 *    ^           |
@@ -106,7 +107,6 @@ ArdourMarker::ArdourMarker (PublicEditor& ed, ArdourCanvas::Item& parent, guint3
 	 *
 	 * TempoMark:
 	 * MeterMark:
-	 * BBTPosition
 	 *
 	 *        (3,0)
 	 *     /         \
@@ -166,6 +166,7 @@ ArdourMarker::ArdourMarker (PublicEditor& ed, ArdourCanvas::Item& parent, guint3
 
 	switch (type) {
 	case Mark:
+	case BBTPosition:
 		points = new ArdourCanvas::Points ();
 
 		points->push_back (ArdourCanvas::Duple (0.0, 0.0));
@@ -181,7 +182,6 @@ ArdourMarker::ArdourMarker (PublicEditor& ed, ArdourCanvas::Item& parent, guint3
 
 	case Tempo:
 	case Meter:
-	case BBTPosition:
 		points = new ArdourCanvas::Points ();
 		points->push_back (ArdourCanvas::Duple ( M3, 0.0));
 		points->push_back (ArdourCanvas::Duple ( M6, MH * .6));
@@ -631,7 +631,6 @@ BBTMarker::BBTMarker (PublicEditor& editor, ArdourCanvas::Item& parent, guint32 
 	: ArdourMarker (editor, parent, rgba, text, BBTPosition, p.time(), false)
 	, _point (p)
 {
-	cerr << "NEW BBT MARKER!\n";
 	group->Event.connect (sigc::bind (sigc::mem_fun (editor, &PublicEditor::canvas_bbt_marker_event), group, this));
 }
 
