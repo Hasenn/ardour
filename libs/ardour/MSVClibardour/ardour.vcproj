@@ -1670,10 +1670,6 @@
 				>
 			</File>
 			<File
-				RelativePath="..\ardour\beats_samples_converter.h"
-				>
-			</File>
-			<File
 				RelativePath="..\ardour\boost_debug.h"
 				>
 			</File>
