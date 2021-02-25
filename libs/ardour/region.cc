@@ -246,7 +246,6 @@ Region::Region (Session& s, timecnt_t const & start, timecnt_t const & length, c
 	, _type(type)
         , REGION_DEFAULT_STATE(start,length)
 	, _last_length (length)
-	, _last_position (_type == DataType::MIDI ? timepos_t (Temporal::Beats()) : timepos_t::from_superclock (0))
 	, _first_edit (EditChangesNothing)
 	, _layer (0)
 {
@@ -262,7 +261,6 @@ Region::Region (const SourceList& srcs)
 	, REGION_DEFAULT_STATE(_type == DataType::MIDI ? timecnt_t (Temporal::Beats()) : timecnt_t::from_superclock (0),
 	                       _type == DataType::MIDI ? timecnt_t (Temporal::Beats()) : timecnt_t::from_superclock (0))
 	, _last_length (_type == DataType::MIDI ? timecnt_t (Temporal::Beats()) : timecnt_t::from_superclock (0))
-	, _last_position (_type == DataType::MIDI ? timepos_t (Temporal::Beats()) : timepos_t::from_superclock (0))
 	, _first_edit (EditChangesNothing)
 	, _layer (0)
 {
@@ -282,7 +280,6 @@ Region::Region (boost::shared_ptr<const Region> other)
 	, _type (other->data_type())
 	, REGION_COPY_STATE (other)
 	, _last_length (other->_last_length)
-	, _last_position(other->_last_position) \
 	, _first_edit (EditChangesNothing)
 	, _layer (other->_layer)
 {
@@ -340,7 +337,6 @@ Region::Region (boost::shared_ptr<const Region> other, timecnt_t const & offset)
 	, _type (other->data_type())
 	, REGION_COPY_STATE (other)
 	, _last_length (other->_last_length)
-	, _last_position(other->_last_position) \
 	, _first_edit (EditChangesNothing)
 	, _layer (other->_layer)
 {
@@ -385,7 +381,6 @@ Region::Region (boost::shared_ptr<const Region> other, const SourceList& srcs)
 	, _type (srcs.front()->type())
 	, REGION_COPY_STATE (other)
 	, _last_length (other->_last_length)
-	, _last_position (other->_last_position)
 	, _first_edit (EditChangesID)
 	, _layer (other->_layer)
 {
@@ -667,8 +662,7 @@ Region::set_position_internal (timepos_t const & pos)
 	 * (see Region::set_position), so we must always set this up so that
 	 * e.g. Playlist::notify_region_moved doesn't use an out-of-date last_position.
 	 */
-	_last_position = position();
-	_last_length.set_position (_last_position);
+	_last_length.set_position (position());
 
 	if (position() != pos) {
 #warning NUTEMPO is this correct? why would set position set the position of the start (duration)?
@@ -716,7 +710,6 @@ Region::set_initial_position (timepos_t const & pos)
 
 		recompute_position_from_time_domain ();
 		/* ensure that this move doesn't cause a range move */
-		_last_position = position();
 		_last_length.set_position (position());
 	}
 
@@ -1000,7 +993,7 @@ Region::trim_to_internal (timepos_t const & pos, timecnt_t const & len)
 
 	if (position() != pos) {
 		if (!property_changes_suspended()) {
-			_last_position = position();
+			_last_length.set_position (position());
 		}
 		set_position_internal (pos);
 		what_changed.add (Properties::position);
@@ -1386,7 +1379,6 @@ Region::suspend_property_changes ()
 {
 	Stateful::suspend_property_changes ();
 	_last_length = _length;
-	_last_position = position();
 }
 
 void
