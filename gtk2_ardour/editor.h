@@ -493,6 +493,9 @@ public:
 	                            GdkEvent const*      ev,
 	                            Temporal::RoundMode    direction = Temporal::RoundNearest,
 	                            ARDOUR::SnapPref     gpref = ARDOUR::SnapToAny_Visual);
+	Temporal::timepos_t snap_to_bbt (Temporal::timepos_t const & start,
+	                                 Temporal::RoundMode   direction,
+	                                 ARDOUR::SnapPref    gpref);
 
 	void set_snapped_cursor_position (Temporal::timepos_t const & pos);
 
@@ -2233,10 +2236,6 @@ private:
 	Temporal::timepos_t snap_to_cd_frames (Temporal::timepos_t const & start,
 	                                       Temporal::RoundMode   direction,
 	                                       ARDOUR::SnapPref    gpref);
-
-	Temporal::timepos_t snap_to_bbt (Temporal::timepos_t const & start,
-	                                 Temporal::RoundMode   direction,
-	                                 ARDOUR::SnapPref    gpref);
 
 	Temporal::timepos_t snap_to_timecode (Temporal::timepos_t const & start,
 	                                      Temporal::RoundMode   direction,
